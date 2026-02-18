@@ -244,10 +244,14 @@ class EdgeTTS:
 
     @staticmethod
     def synthesize(text: str, voice: str) -> Optional[bytes]:
-        """Senkron wrapper — edge_tts async'ini çalıştırır."""
+        """
+        Streamlit zaten bir async event loop çalıştırır.
+        Bu yüzden edge_tts'i ayrı bir thread'de, kendi loop'uyla çalıştırıyoruz.
+        """
         try:
             import edge_tts
             import asyncio
+            import concurrent.futures
 
             async def _run():
                 communicate = edge_tts.Communicate(text, voice)
@@ -257,18 +261,19 @@ class EdgeTTS:
                         buf.write(chunk["data"])
                 return buf.getvalue()
 
-            # Mevcut event loop varsa yeni thread'de çalıştır
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor() as pool:
-                        future = pool.submit(asyncio.run, _run())
-                        return future.result(timeout=30)
-                else:
+            def _run_in_thread():
+                # Her thread kendi event loop'una sahip
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
                     return loop.run_until_complete(_run())
-            except RuntimeError:
-                return asyncio.run(_run())
+                finally:
+                    loop.close()
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(_run_in_thread)
+                return future.result(timeout=60)
+
         except Exception as e:
             st.warning(f"Edge TTS hatası: {e}")
             return None
@@ -1028,31 +1033,21 @@ def sidebar() -> dict:
 
         engine = st.radio(
             "Motor",
-            ["🆓 gTTS (Google) — Önerilen",
-             "🆓 Edge TTS (Microsoft)",
+            ["🆓 Edge TTS (Microsoft) — Önerilen",
+             "🆓 gTTS (Google)",
              "💳 OpenAI TTS",
              "🎤 ElevenLabs (Klon Ses)"],
             label_visibility="collapsed",
         )
         tts_config = {}
 
-        # ── gTTS (varsayılan) ─────────────────────────────
-        if "gTTS" in engine:
-            tts_config["engine"] = "gtts"
-            if GTTS.available():
+        # ── Edge TTS (varsayılan) ─────────────────────────
+        if "Edge" in engine:
+            tts_config["engine"] = "edge"
+            if EdgeTTS.available():
                 st.success("✅ Hazır! API key gerekmez.")
             else:
                 st.warning("⚠️ Bir kez kurmanız gerekiyor:")
-                st.code("pip install gtts", language="bash")
-            st.info("ℹ️ Tüm karakterler Türkçe Google sesiyle konuşur.\nFarklı sesler için Edge TTS'i deneyin.")
-
-        # ── Edge TTS ─────────────────────────────────────
-        elif "Edge" in engine:
-            tts_config["engine"] = "edge"
-            if EdgeTTS.available():
-                st.success("✅ edge-tts kurulu, hazır!")
-            else:
-                st.warning("⚠️ Kurulu değil:")
                 st.code("pip install edge-tts", language="bash")
             st.markdown('<p class="sct">Karakter → Ses Eşlemesi</p>', unsafe_allow_html=True)
             char_voices = {}
@@ -1065,6 +1060,16 @@ def sidebar() -> dict:
                 )
                 char_voices[ch] = EDGE_VOICES[choice]
             tts_config["char_voices"] = char_voices
+
+        # ── gTTS ─────────────────────────────────────────
+        elif "gTTS" in engine:
+            tts_config["engine"] = "gtts"
+            if GTTS.available():
+                st.success("✅ Hazır! API key gerekmez.")
+            else:
+                st.warning("⚠️ Bir kez kurmanız gerekiyor:")
+                st.code("pip install gtts", language="bash")
+            st.info("ℹ️ Tüm karakterler aynı Türkçe sesi kullanır.")
 
         # ── OpenAI TTS ───────────────────────────────────
         elif "OpenAI" in engine:
