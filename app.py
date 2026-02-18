@@ -212,16 +212,16 @@ class ScriptParser:
 
 # Edge TTS Türkçe sesleri (Microsoft, ücretsiz)
 EDGE_VOICES = {
-    "Emine (Kadın)":  "tr-TR-EminNeural",
-    "Ahmet (Erkek)":  "tr-TR-AhmetNeural",
+    "Elif (Kadın)":  "tr-TR-EminNeural",
+    "Eba (Erkek)":  "tr-TR-EbaNeural",
 }
 
 # Her karakter için Edge TTS ses ataması
 EDGE_CHARACTER_VOICES = {
-    "Sunucu":    "tr-TR-AhmetNeural",
+    "Sunucu":    "tr-TR-EbaNeural",
     "Konuk":     "tr-TR-EminNeural",
-    "Dis Ses":   "tr-TR-AhmetNeural",
-    "Uzman":     "tr-TR-AhmetNeural",
+    "Dis Ses":   "tr-TR-EbaNeural",
+    "Uzman":     "tr-TR-EbaNeural",
     "Raportör":  "tr-TR-EminNeural",
     "Anlatici":  "tr-TR-EminNeural",
 }
@@ -1052,10 +1052,10 @@ def sidebar() -> dict:
             st.markdown('<p class="sct">Karakter → Ses Eşlemesi</p>', unsafe_allow_html=True)
             char_voices = {}
             for ch in CHARACTERS:
-                default = EDGE_CHARACTER_VOICES.get(ch, "tr-TR-AhmetNeural")
+                default = EDGE_CHARACTER_VOICES.get(ch, "tr-TR-EbaNeural")
                 choice  = st.selectbox(
                     ch, list(EDGE_VOICES.keys()),
-                    index=0 if "Ahmet" in default else 1,
+                    index=0 if "Eba" in default else 1,
                     key=f"edge_{ch}",
                 )
                 char_voices[ch] = EDGE_VOICES[choice]
@@ -1155,7 +1155,7 @@ def synthesize_one(text: str, char: str, tts_config: dict) -> Optional[bytes]:
     engine = tts_config.get("engine", "edge")
 
     if engine == "edge":
-        voice = tts_config.get("char_voices", {}).get(char, "tr-TR-AhmetNeural")
+        voice = tts_config.get("char_voices", {}).get(char, "tr-TR-EbaNeural")
         return EdgeTTS.synthesize(text, voice)
 
     elif engine == "gtts":
