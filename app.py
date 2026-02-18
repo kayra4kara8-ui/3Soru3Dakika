@@ -693,9 +693,10 @@ class PDFMaker:
                 c.rect(0, H - strip_h * (i+1), W, strip_h, fill=1, stroke=0)
 
             # decorative dots
-            c.setFillColorRGB(*[x/255 for x in hex_to_rgb(color)], alpha=None)
+            dot_color = [x/255 for x in hex_to_rgb(color)]
             for dx in range(0, int(W), 50):
                 for dy in range(0, int(H), 50):
+                    c.setFillColorRGB(*dot_color)
                     c.setFillAlpha(0.08)
                     c.circle(dx, dy, 2, fill=1, stroke=0)
             c.setFillAlpha(1)
@@ -756,16 +757,20 @@ class PDFMaker:
                 c.drawCentredString(W / 2, start_y, line)
                 start_y -= line_h
 
-            # bubble tip (triangle)
+            # bubble tip (triangle) — reportlab path objesi ile
             c.setFillColorRGB(0.95, 0.95, 1)
             c.setFillAlpha(0.92)
             tip_x = W / 2
-            c.beginPath()
-            c.moveTo(tip_x - 14, bub_y_pt + bub_h_pt)
-            c.lineTo(tip_x + 14, bub_y_pt + bub_h_pt)
-            c.lineTo(tip_x, bub_y_pt + bub_h_pt + 18)
-            c.closePath()
-            c.fill()
+            tip_y_base = bub_y_pt + bub_h_pt
+            from reportlab.graphics.shapes import Polygon
+            from reportlab.lib.colors import Color as RLColor
+            tip_color = RLColor(0.95, 0.95, 1, 0.92)
+            p = c.beginPath()
+            p.moveTo(tip_x - 14, tip_y_base)
+            p.lineTo(tip_x + 14, tip_y_base)
+            p.lineTo(tip_x,      tip_y_base + 18)
+            p.close()
+            c.drawPath(p, fill=1, stroke=0)
 
             # slide number
             c.setFillAlpha(0.45)
@@ -1013,27 +1018,36 @@ def init_state():
             st.session_state[k] = v
 
 
-def sidebar() -> tuple:
-    """Sidebar — TTS motor seçimi + ayarlar. (tts_engine, tts_config) döner."""
+def sidebar() -> dict:
+    """Sidebar — TTS motor seçimi + ayarlar. tts_config dict döner."""
     with st.sidebar:
         st.markdown("### 🎬 3 Soru 3 Dakika")
         st.markdown("---")
 
-        # ── TTS Motor Seçimi ──────────────────────────────
         st.markdown('<p class="sct">🎙️ Ses Motoru</p>', unsafe_allow_html=True)
 
         engine = st.radio(
             "Motor",
-            ["🆓 Edge TTS (Microsoft) — Önerilen",
-             "🆓 gTTS (Google)",
+            ["🆓 gTTS (Google) — Önerilen",
+             "🆓 Edge TTS (Microsoft)",
              "💳 OpenAI TTS",
              "🎤 ElevenLabs (Klon Ses)"],
             label_visibility="collapsed",
         )
         tts_config = {}
 
+        # ── gTTS (varsayılan) ─────────────────────────────
+        if "gTTS" in engine:
+            tts_config["engine"] = "gtts"
+            if GTTS.available():
+                st.success("✅ Hazır! API key gerekmez.")
+            else:
+                st.warning("⚠️ Bir kez kurmanız gerekiyor:")
+                st.code("pip install gtts", language="bash")
+            st.info("ℹ️ Tüm karakterler Türkçe Google sesiyle konuşur.\nFarklı sesler için Edge TTS'i deneyin.")
+
         # ── Edge TTS ─────────────────────────────────────
-        if "Edge" in engine:
+        elif "Edge" in engine:
             tts_config["engine"] = "edge"
             if EdgeTTS.available():
                 st.success("✅ edge-tts kurulu, hazır!")
@@ -1045,23 +1059,12 @@ def sidebar() -> tuple:
             for ch in CHARACTERS:
                 default = EDGE_CHARACTER_VOICES.get(ch, "tr-TR-AhmetNeural")
                 choice  = st.selectbox(
-                    ch,
-                    list(EDGE_VOICES.keys()),
+                    ch, list(EDGE_VOICES.keys()),
                     index=0 if "Ahmet" in default else 1,
                     key=f"edge_{ch}",
                 )
                 char_voices[ch] = EDGE_VOICES[choice]
             tts_config["char_voices"] = char_voices
-
-        # ── gTTS ─────────────────────────────────────────
-        elif "gTTS" in engine:
-            tts_config["engine"] = "gtts"
-            if GTTS.available():
-                st.success("✅ gtts kurulu, hazır!")
-            else:
-                st.warning("⚠️ Kurulu değil:")
-                st.code("pip install gtts", language="bash")
-            st.info("ℹ️ gTTS tüm karakterler için aynı sesi kullanır.")
 
         # ── OpenAI TTS ───────────────────────────────────
         elif "OpenAI" in engine:
@@ -1074,7 +1077,6 @@ def sidebar() -> tuple:
             if okey:
                 st.session_state.openai_key = okey
             tts_config["key"] = okey
-
             OPENAI_VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
             st.markdown('<p class="sct">Karakter → Ses</p>', unsafe_allow_html=True)
             char_voices = {}
@@ -1089,13 +1091,11 @@ def sidebar() -> tuple:
             tts_config["engine"] = "elevenlabs"
             if "el_key" not in st.session_state:
                 st.session_state.el_key = ""
-
             el_key = st.text_input("ElevenLabs API Key", type="password",
                                    placeholder="sk_...",
                                    value=st.session_state.el_key)
             if el_key:
                 st.session_state.el_key = el_key
-
             if el_key and st.button("🔌 Bağlan", use_container_width=True):
                 try:
                     api = ElevenLabsAPI(el_key)
@@ -1105,42 +1105,30 @@ def sidebar() -> tuple:
                 except Exception as e:
                     st.session_state.el_ok  = False
                     st.session_state.el_msg = str(e)
-
             el_msg = st.session_state.get("el_msg", "")
             if el_msg:
                 (st.success if st.session_state.get("el_ok") else st.error)(
                     f"{'✅' if st.session_state.get('el_ok') else '❌'} {el_msg}"
                 )
-
             tts_config["key"] = el_key
-            stab = st.slider("Kararlılık", 0.0, 1.0, 0.5, 0.05)
-            sim  = st.slider("Benzerlik",  0.0, 1.0, 0.75, 0.05)
-            tts_config["stab"] = stab
-            tts_config["sim"]  = sim
-
+            tts_config["stab"] = st.slider("Kararlılık", 0.0, 1.0, 0.5, 0.05)
+            tts_config["sim"]  = st.slider("Benzerlik",  0.0, 1.0, 0.75, 0.05)
             if el_key and st.session_state.get("el_ok"):
                 if st.button("🎧 Sesleri Listele", use_container_width=True):
-                    vs = ElevenLabsAPI(el_key).list_voices()
-                    for v in vs[:15]:
+                    for v in ElevenLabsAPI(el_key).list_voices()[:15]:
                         st.code(f"{v['name']}\n{v['voice_id']}", language=None)
 
-        # ── Ortak Ayarlar ─────────────────────────────────
+        # ── Ortak ─────────────────────────────────────────
         st.markdown("---")
         st.markdown('<p class="sct">🎭 Karakterler</p>', unsafe_allow_html=True)
         for ch, info in CHARACTERS.items():
             st.markdown(f"{info['emoji']} **{ch}**")
 
         st.markdown("---")
-        # Kurulu kütüphane durumu
         st.markdown('<p class="sct">📦 Kütüphaneler</p>', unsafe_allow_html=True)
-        libs = [
-            ("edge_tts",  "edge-tts"),
-            ("gtts",      "gtts"),
-            ("PIL",       "Pillow"),
-            ("imageio",   "imageio[ffmpeg]"),
-            ("reportlab", "reportlab"),
-        ]
-        for lib, name in libs:
+        for lib, name in [("gtts","gtts"), ("edge_tts","edge-tts"),
+                          ("PIL","Pillow"), ("imageio","imageio[ffmpeg]"),
+                          ("reportlab","reportlab")]:
             try:
                 __import__(lib)
                 st.markdown(f"🟢 {name}")
@@ -1148,7 +1136,7 @@ def sidebar() -> tuple:
                 st.markdown(f"🔴 {name}")
 
         st.markdown("---")
-        st.caption("v3.1 | Edge/gTTS/OpenAI/ElevenLabs")
+        st.caption("v3.1 | gTTS / Edge / OpenAI / ElevenLabs")
 
     return tts_config
 
