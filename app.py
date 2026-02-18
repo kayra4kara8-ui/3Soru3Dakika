@@ -228,13 +228,13 @@ class ElevenLabsAPI:
 
     def check(self) -> tuple[bool, str]:
         try:
-            r = requests.get(f"{self.BASE}/user", headers=self.h, timeout=10)
+            # /v1/user bazı sk_ anahtarlarında 401 veriyor, /v1/voices daha güvenilir
+            r = requests.get(f"{self.BASE}/voices", headers=self.h, timeout=10)
             if r.status_code == 200:
-                d  = r.json()
-                nm = d.get("first_name", "Kullanici")
-                cc = d.get("subscription", {}).get("character_count", "?")
-                cl = d.get("subscription", {}).get("character_limit", "?")
-                return True, f"{nm} — Karakter: {cc}/{cl}"
+                voices = r.json().get("voices", [])
+                count  = len(voices)
+                names  = ", ".join(v["name"] for v in voices[:3])
+                return True, f"Bağlandı ✓ — {count} ses bulundu ({names}...)"
             # Hata mesajını JSON'dan düzgün çek
             try:
                 err_json = r.json()
@@ -970,18 +970,20 @@ def sidebar() -> tuple:
                 if st.session_state.api_ok:
                     st.success(f"✅ {msg}")
                 else:
-                    # Uzun teknik mesajı temizle
                     short_msg = str(msg).split("DeltaGenerator")[0].strip()
-                    if "401" in short_msg or "missing_permissions" in short_msg:
+                    if "401" in short_msg:
                         st.error(
-                            "❌ API anahtarı geçersiz veya eksik yetki.\n\n"
-                            "**Kontrol edin:**\n"
-                            "- Anahtarı tam kopyaladınız mı? (`sk_` veya `xi-` ile başlamalı)\n"
-                            "- Boşluk kalmış olabilir — silerek tekrar yapıştırın\n"
-                            "- ElevenLabs hesabınız aktif mi?"
+                            f"❌ **401 — Yetki Hatası**\n\n"
+                            f"API yanıtı: `{short_msg}`\n\n"
+                            "**Olası sebepler:**\n"
+                            "- Anahtar yanlış kopyalanmış (başında/sonunda boşluk)\n"
+                            "- ElevenLabs hesabında email doğrulanmamış\n"
+                            "- Anahtar iptal edilmiş → yeni anahtar oluşturun"
                         )
+                    elif "timeout" in short_msg.lower() or "connection" in short_msg.lower():
+                        st.error("❌ Bağlantı hatası — internet bağlantınızı kontrol edin.")
                     else:
-                        st.error(f"❌ {short_msg[:120]}")
+                        st.error(f"❌ {short_msg[:200]}")
 
             if st.session_state.api_ok and key:
                 api = ElevenLabsAPI(key.strip())
