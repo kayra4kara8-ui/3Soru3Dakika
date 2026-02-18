@@ -1,25 +1,21 @@
-# ─── Zorunlu ───────────────────────────────────────────
+# Zorunlu
 streamlit>=1.32.0
 requests>=2.31.0
 
-# ─── TTS Motorları (birini seçin, hepsini kurabilirsiniz) ───
-
-# SEÇENEK 1 — Edge TTS (Microsoft) ← ÖNERİLEN, ücretsiz, Türkçe mükemmel
-edge-tts>=6.1.0
-
-# SEÇENEK 2 — Google TTS, ücretsiz
+# TTS — gTTS varsayılan (API key gerektirmez)
 gtts>=2.3.2
 
-# SEÇENEK 3 — OpenAI TTS (ücretli, en kaliteli)
-# openai>=1.0.0   ← isteğe bağlı
+# İsteğe bağlı TTS alternatifleri
+edge-tts>=6.1.0       # Microsoft, Türkçe erkek+kadın ses
+# openai>=1.0.0       # OpenAI TTS (ücretli)
 
-# ─── Görsel & Video ────────────────────────────────────
+# Görsel & Video
 Pillow>=10.0.0
 imageio[ffmpeg]>=2.34.0
 
-# ─── PDF ───────────────────────────────────────────────
+# PDF
 reportlab>=4.0.0
 
-# ─── Kurulum ───────────────────────────────────────────
+# Kurulum:
 # pip install -r requirements.txt
 # streamlit run app.py
