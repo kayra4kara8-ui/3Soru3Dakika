@@ -1,1025 +1,668 @@
 """
-3 SORU 3 DAKİKA - PROFESYONEL PODCAST OLUŞTURUCU
-ElevenLabs API ile çok sesli podcast oluşturma uygulaması
-Version: 2.0.0
+🎙️ 3 Soru 3 Dakika - Çok Sesli Podcast Oluşturucu
+Kendi klonlanmış sesinizle profesyonel podcast'ler oluşturun.
 """
 
 import streamlit as st
 import requests
-import json
 import time
-import base64
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple
-import logging
+import json
+import io
+from typing import Optional
 
-# Logging ayarları
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# ============================================================
+# 1. KONFİGÜRASYON BÖLÜMÜ - Buradan kolayca düzenleyin!
+# ============================================================
 
-# Sayfa yapılandırması - TEK VE EN BAŞTA
-st.set_page_config(
-    page_title="3 Soru 3 Dakika | Profesyonel Podcast Studio",
-    page_icon="🎙️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+CHARACTERS = {
+    "Sunucu":    {"color": "#E74C3C", "emoji": "🎤"},
+    "Konuk":     {"color": "#3498DB", "emoji": "👤"},
+    "Dış Ses":   {"color": "#2ECC71", "emoji": "🎧"},
+    # --- İsteğe bağlı ek karakterler (yorum satırını kaldırın veya yenilerini ekleyin) ---
+    "Uzman":     {"color": "#F39C12", "emoji": "👨‍🏫"},
+    "Raportör":  {"color": "#9B59B6", "emoji": "📰"},
+    "Anlatıcı":  {"color": "#1ABC9C", "emoji": "📖"},
+    "Çocuk":     {"color": "#E91E63", "emoji": "🧒"},
+}
 
-# ============================================================================
-# SABITLER VE KONFIGÜRASYON
-# ============================================================================
+# Ses ID'leri - ElevenLabs'dan aldığınız voice_id değerlerini girin.
+# Hepsine aynı ID'yi girebilirsiniz (kendi klonlanmış sesiniz) veya farklı sesler atayabilirsiniz.
+VOICE_IDS = {
+    "Sunucu":    "KENDI_SES_ID_BURAYA",
+    "Konuk":     "KENDI_SES_ID_BURAYA",
+    "Dış Ses":   "KENDI_SES_ID_BURAYA",
+    "Uzman":     "KENDI_SES_ID_BURAYA",
+    "Raportör":  "KENDI_SES_ID_BURAYA",
+    "Anlatıcı":  "KENDI_SES_ID_BURAYA",
+    "Çocuk":     "KENDI_SES_ID_BURAYA",
+}
 
-class Config:
-    """Uygulama konfigürasyonu"""
-    
-    # ElevenLabs ses kimlikleri (profesyonel sesler)
-    VOICE_IDS = {
-        "Sunucu": "21m00Tcm4TlvDq8ikWAM",      # Rachel - Profesyonel sunucu
-        "Konuk": "AZnzlk1XvdvUeBnXmlld",        # Adam - Doğal konuşma
-        "Dış Ses": "EXAVITQu4vr4xnSDxMaL",      # Bella - Anons sesi
-        "Uzman": "TxGEqnHWrfWFTfGW9XjX",        # Josh - Uzman sesi
-        "Raportör": "XpPJqWX8T7Fir3jRqU6H"      # Nicole - Haber spikeri
-    }
-    
-    # Karakter renkleri ve stilleri
-    CHARACTERS = {
-        "Sunucu": {
-            "color": "#E74C3C",
-            "emoji": "🎤",
-            "bg": "#E74C3C15",
-            "description": "Profesyonel sunucu"
-        },
-        "Konuk": {
-            "color": "#3498DB",
-            "emoji": "👤",
-            "bg": "#3498DB15",
-            "description": "Doğal konuşmacı"
-        },
-        "Dış Ses": {
-            "color": "#2ECC71",
-            "emoji": "🎧",
-            "bg": "#2ECC7115",
-            "description": "Anons sesi"
-        },
-        "Uzman": {
-            "color": "#F39C12",
-            "emoji": "👨‍🏫",
-            "bg": "#F39C1215",
-            "description": "Uzman görüşü"
-        },
-        "Raportör": {
-            "color": "#9B59B6",
-            "emoji": "📰",
-            "bg": "#9B59B615",
-            "description": "Haber spikeri"
-        }
-    }
-    
-    # API endpoint'leri
-    ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1"
-    
-    # Rate limiting
-    REQUEST_DELAY = 0.5  # saniye
-    
-    # Maksimum metin uzunluğu
-    MAX_TEXT_LENGTH = 5000
+# Dinamik renk paleti - bilinmeyen karakterlere otomatik renk atanır
+FALLBACK_COLORS = [
+    "#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4",
+    "#FFEAA7", "#DDA0DD", "#98D8C8", "#F7DC6F",
+    "#BB8FCE", "#82E0AA",
+]
 
-# ============================================================================
-# SESSION STATE YÖNETİMİ
-# ============================================================================
+# Hazır şablonlar
+TEMPLATES = {
+    "🎤 Röportaj": """Sunucu: Merhaba dinleyiciler! Bugün çok özel bir konuğumuz var. Hoş geldiniz!
+Konuk: Merhaba! Burada olmaktan gerçekten mutluyum.
+Dış Ses: Bu röportaj öncesinde konuğumuzun son kitabı büyük yankı uyandırdı.
+Sunucu: Peki, bize bu projeyi nasıl anlattınız?
+Konuk: Her şey küçük bir fikirle başladı. İlk adımlar zordu ama...
+Dış Ses: Bu noktada konuğumuz kısa bir duraksamayla devam etti.
+Sunucu: Ve o an nasıl hissettiniz?
+Konuk: İnanılmaz bir motivasyon kaynağı bulmuştum. Her şey değişti.
+Sunucu: Harika bir yolculuk! Dinleyicilerimize son bir mesajınız?
+Konuk: Hayallerinizin peşinden gidin. Yol uzun ama değer.
+Dış Ses: Bizi dinlediğiniz için teşekkürler. Bir sonraki bölümde görüşmek üzere!""",
 
-def init_session_state():
-    """Session state değişkenlerini başlat"""
-    
-    if 'initialized' not in st.session_state:
-        st.session_state.initialized = True
-        st.session_state.podcast_history = []
-        st.session_state.current_audio = None
-        st.session_state.current_script = None
-        st.session_state.generated_segments = []
-        st.session_state.api_key_valid = False
-        st.session_state.error_count = 0
-        st.session_state.success_count = 0
-        st.session_state.last_error = None
-        st.session_state.processing = False
+    "📰 Haber": """Dış Ses: 3 Soru 3 Dakika haber bültenine hoş geldiniz.
+Sunucu: Bugünün öne çıkan haberleriyle başlıyoruz.
+Raportör: Teknoloji dünyasından gelişmeler var. Yapay zeka kullanımı rekor kırdı.
+Sunucu: Bu gelişme sektörü nasıl etkiliyor?
+Uzman: Verimlilik artışı gözle görülür bir seviyeye ulaştı. Rakamlar çarpıcı.
+Raportör: İstatistiklere göre son bir yılda kullanım oranı yüzde iki yüz arttı.
+Sunucu: Peki önümüzdeki dönemde ne bekleyebiliriz?
+Uzman: Entegrasyon süreçleri hızlanacak. İş dünyası adapte olmak zorunda.
+Dış Ses: Haberleri takip etmeye devam edin. Yarın görüşmek üzere!""",
 
-# ============================================================================
-# METİN İŞLEME
-# ============================================================================
+    "📚 Eğitim": """Sunucu: Bilim dünyasına hoş geldiniz! Bugün çok ilginç bir konu var.
+Dış Ses: Bu bölümde kuantum fiziğinin temellerini ele alacağız.
+Konuk: Kuantum fiziği, atom altı parçacıkların davranışını inceler.
+Sunucu: Peki bu bizim günlük hayatımızı nasıl etkiliyor?
+Uzman: Akıllı telefonunuzdan tıbbi görüntülemeye kadar her yerde kuantum var.
+Konuk: En ilgi çekici konu süperpozisyon ilkesi. Parçacık aynı anda iki yerde olabilir.
+Sunucu: Bu nasıl mümkün olabiliyor?
+Uzman: Ölçüm yapana kadar sistem belirsizliğini korur. Schrödinger'in kedisi tam bunu anlatır.
+Dış Ses: Bir sonraki bölümde kuantum dolanıklığını inceleyeceğiz. Takipte kalın!""",
+
+    "📖 Hikaye": """Anlatıcı: Karanlık ve fırtınalı bir geceydi. Şehir uyurken o uyumuyordu.
+Sunucu: Dedektif Mara, masasında oturmuş dosyalara bakıyordu.
+Konuk: Bu dava diğerlerine benzemiyordu. Bir şeyler tutarsızdı.
+Anlatıcı: Tam o sırada telefon çaldı. Karşıdaki ses tanıdıktı.
+Sunucu: Kim arıyordu beni bu gece?
+Konuk: Sesi titriyordu. "Yardıma ihtiyacım var" dedi yalnızca.
+Anlatıcı: Mara ayağa kalktı. Görev çağrısı beklemezdi.
+Sunucu: Adresi al, yola çık. Soru sormanın zamanı değil.
+Anlatıcı: Ve böylece en büyük davası başlamış oldu...""",
+}
+
+
+# ============================================================
+# 2. SINIFLAR
+# ============================================================
 
 class ScriptParser:
-    """Podcast metnini parse eden sınıf"""
-    
-    @staticmethod
-    def parse(text: str) -> List[Dict]:
-        """
-        Metni parse ederek karakter ve metinleri çıkarır
-        
-        Args:
-            text: Ham metin
-            
-        Returns:
-            List[Dict]: Parse edilmiş satırlar
-        """
-        if not text or not text.strip():
-            return []
-        
-        lines = text.strip().split('\n')
-        parsed_lines = []
-        current_line = None
-        
-        for line_num, line in enumerate(lines, 1):
+    """Podcast metnini parse eder ve segmentlere ayırır."""
+
+    def __init__(self, characters: dict):
+        self.characters = characters
+        self._dynamic_colors = {}
+        self._color_idx = 0
+
+    def _get_color_for_unknown(self, char_name: str) -> str:
+        if char_name not in self._dynamic_colors:
+            color = FALLBACK_COLORS[self._color_idx % len(FALLBACK_COLORS)]
+            self._dynamic_colors[char_name] = color
+            self._color_idx += 1
+        return self._dynamic_colors[char_name]
+
+    def parse(self, script: str) -> list[dict]:
+        segments = []
+        lines = script.strip().split('\n')
+        current_char = None
+        current_text_parts = []
+
+        for line in lines:
             line = line.strip()
             if not line:
                 continue
-                
-            # Karakter kontrolü
-            character_found = False
-            for char in Config.CHARACTERS.keys():
-                if line.startswith(f"{char}:"):
-                    # Yeni karakter satırı
-                    text_content = line[len(char)+1:].strip()
-                    if text_content:
-                        parsed_lines.append({
-                            'character': char,
-                            'text': text_content,
-                            'line_number': line_num,
-                            'voice_id': Config.VOICE_IDS.get(char, Config.VOICE_IDS["Sunucu"])
-                        })
-                        current_line = parsed_lines[-1]
-                    character_found = True
-                    break
-            
-            # Karakter bulunamadıysa önceki satıra ekle
-            if not character_found and current_line:
-                current_line['text'] += " " + line
-            elif not character_found and not current_line:
-                # İlk satır karakter yoksa Sunucu'ya ata
-                parsed_lines.append({
-                    'character': "Sunucu",
-                    'text': line,
-                    'line_number': line_num,
-                    'voice_id': Config.VOICE_IDS["Sunucu"]
-                })
-                current_line = parsed_lines[-1]
-        
-        return parsed_lines
-    
-    @staticmethod
-    def validate(parsed_lines: List[Dict]) -> Tuple[bool, str]:
-        """
-        Parse edilmiş metni validate eder
-        
-        Args:
-            parsed_lines: Parse edilmiş satırlar
-            
-        Returns:
-            Tuple[bool, str]: (geçerli mi, hata mesajı)
-        """
-        if not parsed_lines:
-            return False, "Metin boş olamaz"
-        
-        total_chars = sum(len(line['text']) for line in parsed_lines)
-        if total_chars > Config.MAX_TEXT_LENGTH:
-            return False, f"Metin çok uzun (max: {Config.MAX_TEXT_LENGTH} karakter)"
-        
-        for line in parsed_lines:
-            if len(line['text']) > 500:
-                return False, f"Satır çok uzun (max: 500 karakter): {line['text'][:50]}..."
-        
-        return True, "OK"
+            if ':' in line:
+                colon_pos = line.index(':')
+                potential_char = line[:colon_pos].strip()
+                rest = line[colon_pos + 1:].strip()
+                # Karakter ismi mi yoksa metin içi iki nokta mı?
+                if len(potential_char) > 0 and len(potential_char) <= 30 and not any(c in potential_char for c in ['!', '?', '.', ',']):
+                    # Önceki segmenti kaydet
+                    if current_char and current_text_parts:
+                        segments.append(self._build_segment(current_char, ' '.join(current_text_parts)))
+                    current_char = potential_char
+                    current_text_parts = [rest] if rest else []
+                    continue
+            # Devam satırı
+            if current_char:
+                current_text_parts.append(line)
+            else:
+                # Karakter tanımlanmamış → Sunucu'ya ata
+                default = list(self.characters.keys())[0] if self.characters else "Sunucu"
+                current_char = default
+                current_text_parts = [line]
 
-# ============================================================================
-# ELEVENLABS API İŞLEMLERİ
-# ============================================================================
+        if current_char and current_text_parts:
+            segments.append(self._build_segment(current_char, ' '.join(current_text_parts)))
+
+        return segments
+
+    def _build_segment(self, char_name: str, text: str) -> dict:
+        if char_name in self.characters:
+            info = self.characters[char_name]
+            color = info["color"]
+            emoji = info["emoji"]
+        else:
+            color = self._get_color_for_unknown(char_name)
+            emoji = "🔊"
+        return {"character": char_name, "text": text, "color": color, "emoji": emoji}
+
+    @staticmethod
+    def count_words(script: str) -> int:
+        return len(script.split())
+
+    @staticmethod
+    def estimate_duration(word_count: int) -> str:
+        # Ortalama konuşma hızı ~130 kelime/dk
+        minutes = word_count / 130
+        secs = int((minutes % 1) * 60)
+        mins = int(minutes)
+        return f"{mins}:{secs:02d}"
+
 
 class ElevenLabsAPI:
-    """ElevenLabs API ile etkileşim"""
-    
+    """ElevenLabs TTS API ile iletişim kurar."""
+
+    BASE_URL = "https://api.elevenlabs.io/v1"
+
     def __init__(self, api_key: str):
         self.api_key = api_key
-        self.session = requests.Session()
-        self.session.headers.update({
-            "Accept": "audio/mpeg",
-            "Content-Type": "application/json",
-            "xi-api-key": api_key
-        })
-    
-    def text_to_speech(
-        self, 
-        text: str, 
-        voice_id: str,
-        stability: float = 0.5,
-        similarity: float = 0.75
-    ) -> Optional[bytes]:
-        """
-        Metni sese çevir
-        
-        Args:
-            text: Metin
-            voice_id: Ses kimliği
-            stability: Stabilite (0-1)
-            similarity: Benzerlik (0-1)
-            
-        Returns:
-            Optional[bytes]: Ses dosyası veya None
-        """
-        url = f"{Config.ELEVENLABS_API_URL}/text-to-speech/{voice_id}"
-        
-        data = {
+        self.headers = {"xi-api-key": api_key}
+
+    def test_connection(self) -> tuple[bool, str]:
+        try:
+            r = requests.get(f"{self.BASE_URL}/user", headers=self.headers, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                name = data.get("first_name", "Kullanıcı")
+                chars = data.get("subscription", {}).get("character_count", "?")
+                limit = data.get("subscription", {}).get("character_limit", "?")
+                return True, f"✅ Hoş geldin, {name}! Karakter: {chars}/{limit}"
+            return False, f"❌ Hata {r.status_code}: {r.text[:100]}"
+        except Exception as e:
+            return False, f"❌ Bağlantı hatası: {str(e)}"
+
+    def list_voices(self) -> list[dict]:
+        try:
+            r = requests.get(f"{self.BASE_URL}/voices", headers=self.headers, timeout=10)
+            if r.status_code == 200:
+                return r.json().get("voices", [])
+        except Exception:
+            pass
+        return []
+
+    def validate_voice_id(self, voice_id: str) -> bool:
+        if not voice_id or voice_id in ("KENDI_SES_ID_BURAYA", ""):
+            return False
+        try:
+            r = requests.get(f"{self.BASE_URL}/voices/{voice_id}", headers=self.headers, timeout=10)
+            return r.status_code == 200
+        except Exception:
+            return False
+
+    def text_to_speech(self, text: str, voice_id: str, stability: float = 0.5, similarity: float = 0.75) -> Optional[bytes]:
+        url = f"{self.BASE_URL}/text-to-speech/{voice_id}"
+        payload = {
             "text": text,
-            "model_id": "eleven_monolingual_v1",
+            "model_id": "eleven_multilingual_v2",
             "voice_settings": {
                 "stability": stability,
-                "similarity_boost": similarity
+                "similarity_boost": similarity,
             }
         }
-        
         try:
-            response = self.session.post(url, json=data, timeout=30)
-            
-            if response.status_code == 200:
-                return response.content
-            elif response.status_code == 401:
-                raise Exception("Geçersiz API anahtarı")
-            elif response.status_code == 429:
-                raise Exception("Rate limit aşıldı, lütfen bekleyin")
-            else:
-                raise Exception(f"API hatası: {response.status_code}")
-                
-        except requests.exceptions.Timeout:
-            raise Exception("İstek zaman aşımına uğradı")
-        except requests.exceptions.ConnectionError:
-            raise Exception("Bağlantı hatası")
+            r = requests.post(url, headers={**self.headers, "Content-Type": "application/json"},
+                              json=payload, timeout=60)
+            if r.status_code == 200:
+                return r.content
+            st.warning(f"API hatası {r.status_code}: {r.text[:150]}")
         except Exception as e:
-            raise Exception(f"Ses oluşturma hatası: {str(e)}")
-    
-    def get_voices(self) -> List[Dict]:
-        """Kullanılabilir sesleri listele"""
-        url = f"{Config.ELEVENLABS_API_URL}/voices"
-        
-        try:
-            response = self.session.get(url, timeout=10)
-            if response.status_code == 200:
-                return response.json().get('voices', [])
-            return []
-        except:
-            return []
+            st.error(f"İstek hatası: {str(e)}")
+        return None
 
-# ============================================================================
-# UI BİLEŞENLERİ
-# ============================================================================
 
 class UIComponents:
-    """UI bileşenleri"""
-    
-    @staticmethod
-    def character_card(character: str, text: str, is_active: bool = False):
-        """Karakter kartı göster"""
-        char_info = Config.CHARACTERS.get(character, {
-            "color": "#95A5A6",
-            "emoji": "🎙️",
-            "bg": "#95A5A615"
-        })
-        
-        active_style = """
-            border-left: 5px solid #2C3E50;
-            transform: translateX(5px);
-            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-        """ if is_active else ""
-        
-        card_html = f"""
-        <div style="
-            padding: 15px;
-            margin: 10px 0;
-            background: {char_info['bg']};
-            border-radius: 12px;
-            border-left: 5px solid {char_info['color']};
-            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-            transition: all 0.3s ease;
-            {active_style}
-        ">
-            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                <span style="font-size: 1.3rem;">{char_info['emoji']}</span>
-                <strong style="color: {char_info['color']}; font-size: 1.1rem;">
-                    {character}
-                </strong>
-                <span style="
-                    background: {char_info['color']};
-                    color: white;
-                    padding: 2px 8px;
-                    border-radius: 12px;
-                    font-size: 0.7rem;
-                    margin-left: auto;
-                ">
-                    {char_info['description']}
-                </span>
-            </div>
-            <p style="margin: 0; color: #2C3E50; line-height: 1.6; font-size: 0.95rem;">
-                {text}
-            </p>
-        </div>
-        """
-        
-        return card_html
-    
-    @staticmethod
-    def stats_card(title: str, value: str, icon: str, color: str):
-        """İstatistik kartı göster"""
-        card_html = f"""
-        <div style="
-            background: white;
-            padding: 20px;
-            border-radius: 15px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-            text-align: center;
-            border-bottom: 3px solid {color};
-        ">
-            <div style="font-size: 2rem; margin-bottom: 5px;">{icon}</div>
-            <div style="color: #7F8C8D; font-size: 0.85rem; margin-bottom: 5px;">
-                {title}
-            </div>
-            <div style="color: {color}; font-size: 1.5rem; font-weight: bold;">
-                {value}
-            </div>
-        </div>
-        """
-        
-        return card_html
-    
-    @staticmethod
-    def progress_tracker(current: int, total: int, label: str = ""):
-        """İlerleme takibi göster"""
-        percentage = (current / total) * 100 if total > 0 else 0
-        
-        tracker_html = f"""
-        <div style="margin: 15px 0;">
-            <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
-                <span style="color: #2C3E50; font-weight: 500;">{label}</span>
-                <span style="color: #7F8C8D;">{current}/{total}</span>
-            </div>
-            <div style="
-                width: 100%;
-                height: 8px;
-                background: #ECF0F1;
-                border-radius: 4px;
-                overflow: hidden;
-            ">
-                <div style="
-                    width: {percentage}%;
-                    height: 100%;
-                    background: linear-gradient(90deg, #3498DB, #9B59B6);
-                    border-radius: 4px;
-                    transition: width 0.3s ease;
-                "></div>
-            </div>
-        </div>
-        """
-        
-        return tracker_html
+    """Streamlit UI bileşenlerini yönetir."""
 
-# ============================================================================
-# ANA UYGULAMA
-# ============================================================================
-
-def main():
-    """Ana uygulama fonksiyonu"""
-    
-    # Session state'i başlat
-    init_session_state()
-    
-    # Custom CSS
-    st.markdown("""
+    @staticmethod
+    def inject_css():
+        st.markdown("""
         <style>
-        /* Ana container */
-        .main > div {
-            background: #FFFFFF;
-            border-radius: 25px;
-            padding: 25px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+        @import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+
+        html, body, [class*="css"] {
+            font-family: 'Sora', sans-serif;
         }
-        
-        /* Sidebar */
-        .css-1d391kg {
-            background: linear-gradient(180deg, #2C3E50 0%, #3498DB 100%);
+
+        .stApp {
+            background: linear-gradient(135deg, #0a0a0f 0%, #12121f 40%, #0d1117 100%);
+            color: #e8e8f0;
         }
-        
-        /* Butonlar */
-        .stButton > button {
-            background: linear-gradient(90deg, #3498DB, #9B59B6);
-            color: white;
-            border: none;
-            border-radius: 12px;
-            padding: 12px 24px;
-            font-weight: 600;
-            font-size: 1rem;
-            transition: all 0.3s;
-            width: 100%;
-        }
-        
-        .stButton > button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(52, 152, 219, 0.3);
-        }
-        
-        .stButton > button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        
-        /* Text area */
-        .stTextArea textarea {
-            border: 2px solid #ECF0F1;
-            border-radius: 15px;
-            font-size: 1rem;
-            line-height: 1.6;
-            transition: all 0.3s;
-        }
-        
-        .stTextArea textarea:focus {
-            border-color: #3498DB;
-            box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
-        }
-        
-        /* Info boxes */
-        .success-box {
-            background: #2ECC7115;
-            border-left: 5px solid #2ECC71;
-            padding: 20px;
-            border-radius: 12px;
-            margin: 15px 0;
-        }
-        
-        .error-box {
-            background: #E74C3C15;
-            border-left: 5px solid #E74C3C;
-            padding: 20px;
-            border-radius: 12px;
-            margin: 15px 0;
-        }
-        
-        .warning-box {
-            background: #F39C1215;
-            border-left: 5px solid #F39C12;
-            padding: 20px;
-            border-radius: 12px;
-            margin: 15px 0;
-        }
-        
-        .info-box {
-            background: #3498DB15;
-            border-left: 5px solid #3498DB;
-            padding: 20px;
-            border-radius: 12px;
-            margin: 15px 0;
-        }
-        
-        /* Audio player */
-        audio {
-            width: 100%;
-            border-radius: 30px;
-            margin: 10px 0;
-        }
-        
-        /* Metrics */
-        .metric-container {
-            background: white;
-            border-radius: 15px;
-            padding: 15px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-        }
-        
-        /* Divider */
-        .custom-divider {
-            height: 2px;
-            background: linear-gradient(90deg, transparent, #3498DB, transparent);
-            margin: 30px 0;
-        }
-        
+
         /* Header */
-        .app-header {
+        .main-header {
             text-align: center;
-            padding: 30px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 25px;
-            margin-bottom: 30px;
-            color: white;
+            padding: 2.5rem 1rem 1.5rem;
         }
-        
-        .app-header h1 {
-            font-size: 3rem;
-            margin-bottom: 10px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        .main-header h1 {
+            font-size: 2.8rem;
+            font-weight: 800;
+            background: linear-gradient(90deg, #E74C3C, #FF6B6B, #3498DB, #2ECC71);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -1px;
+            margin-bottom: 0.3rem;
         }
-        
-        .app-header p {
-            font-size: 1.2rem;
-            opacity: 0.9;
+        .main-header p {
+            color: #888;
+            font-size: 0.95rem;
+            letter-spacing: 0.05em;
+        }
+
+        /* Segment card */
+        .segment-card {
+            border-radius: 14px;
+            padding: 1rem 1.2rem;
+            margin: 0.6rem 0;
+            border-left: 4px solid;
+            background: rgba(255,255,255,0.04);
+            backdrop-filter: blur(8px);
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }
+        .segment-card:hover {
+            transform: translateX(4px);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+        }
+        .segment-char {
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            margin-bottom: 0.35rem;
+        }
+        .segment-text {
+            font-size: 0.95rem;
+            line-height: 1.65;
+            color: #dde;
+        }
+
+        /* Stats bar */
+        .stats-bar {
+            display: flex;
+            gap: 1.5rem;
+            padding: 0.8rem 1.2rem;
+            background: rgba(255,255,255,0.04);
+            border-radius: 10px;
+            margin-bottom: 1rem;
+            font-size: 0.82rem;
+            color: #aaa;
+        }
+        .stat-item strong {
+            color: #eee;
+        }
+
+        /* Voice badge */
+        .voice-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.3rem 0.75rem;
+            border-radius: 50px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin: 0.2rem 0.2rem 0.2rem 0;
+        }
+        .voice-ok   { background: rgba(46,204,113,0.15); color: #2ECC71; border: 1px solid rgba(46,204,113,0.3); }
+        .voice-warn { background: rgba(231,76,60,0.15);  color: #E74C3C;  border: 1px solid rgba(231,76,60,0.3);  }
+
+        /* Template button override */
+        div[data-testid="stButton"] button {
+            border-radius: 8px;
+            font-family: 'Sora', sans-serif;
+            font-size: 0.82rem;
+            transition: all 0.2s;
+        }
+
+        /* Progress */
+        .stProgress > div > div { border-radius: 10px; }
+
+        /* Sidebar */
+        section[data-testid="stSidebar"] {
+            background: rgba(10,10,20,0.95);
+            border-right: 1px solid rgba(255,255,255,0.06);
+        }
+
+        /* Audio player */
+        audio { width: 100%; border-radius: 8px; margin: 4px 0; }
+
+        /* Text area */
+        textarea {
+            background: rgba(255,255,255,0.04) !important;
+            border-radius: 10px !important;
+            color: #eee !important;
+            font-family: 'JetBrains Mono', monospace !important;
+            font-size: 0.85rem !important;
+        }
+
+        /* Divider */
+        hr { border-color: rgba(255,255,255,0.07); }
+
+        .section-title {
+            font-size: 0.7rem;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            color: #666;
+            margin: 1rem 0 0.5rem;
+        }
+
+        .pulse {
+            animation: pulse 1.4s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%,100% { opacity: 1; }
+            50%      { opacity: 0.45; }
         }
         </style>
-    """, unsafe_allow_html=True)
-    
+        """, unsafe_allow_html=True)
+
+    @staticmethod
+    def render_segment_card(seg: dict, idx: int):
+        color = seg["color"]
+        st.markdown(f"""
+        <div class="segment-card" style="border-color:{color};">
+            <div class="segment-char" style="color:{color};">{seg['emoji']} {seg['character']}</div>
+            <div class="segment-text">{seg['text']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    @staticmethod
+    def render_voice_status(voice_ids: dict, api: Optional["ElevenLabsAPI"] = None):
+        st.markdown('<p class="section-title">🔊 Ses Durumu</p>', unsafe_allow_html=True)
+        cols = st.columns(3)
+        i = 0
+        for char, vid in voice_ids.items():
+            if char not in CHARACTERS:
+                continue
+            is_ok = bool(vid and vid not in ("KENDI_SES_ID_BURAYA", ""))
+            cls = "voice-ok" if is_ok else "voice-warn"
+            icon = "✓" if is_ok else "✗"
+            info = CHARACTERS[char]
+            with cols[i % 3]:
+                st.markdown(f"""
+                <span class="voice-badge {cls}">{info['emoji']} {char} {icon}</span>
+                """, unsafe_allow_html=True)
+            i += 1
+
+
+# ============================================================
+# 3. ANA UYGULAMA
+# ============================================================
+
+def init_session_state():
+    defaults = {
+        "audio_segments": [],
+        "podcast_history": [],
+        "parsed_segments": [],
+        "full_audio": None,
+        "api_connected": False,
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+
+def render_sidebar() -> tuple[Optional[ElevenLabsAPI], float, float]:
+    with st.sidebar:
+        st.markdown("### 🎙️ 3 Soru 3 Dakika")
+        st.markdown("---")
+
+        st.markdown('<p class="section-title">🔑 API Bağlantısı</p>', unsafe_allow_html=True)
+        api_key = st.text_input("ElevenLabs API Key", type="password", placeholder="xi-...")
+
+        api = None
+        if api_key:
+            if st.button("🔌 Bağlan", use_container_width=True):
+                with st.spinner("Bağlanıyor..."):
+                    api = ElevenLabsAPI(api_key)
+                    ok, msg = api.test_connection()
+                    st.session_state.api_connected = ok
+                    if ok:
+                        st.success(msg)
+                    else:
+                        st.error(msg)
+                        api = None
+            if st.session_state.api_connected:
+                api = ElevenLabsAPI(api_key)
+
+        st.markdown("---")
+        st.markdown('<p class="section-title">⚙️ Ses Ayarları</p>', unsafe_allow_html=True)
+        stability  = st.slider("Kararlılık", 0.0, 1.0, 0.5, 0.05)
+        similarity = st.slider("Benzerlik Güçlendirme", 0.0, 1.0, 0.75, 0.05)
+
+        st.markdown("---")
+        st.markdown('<p class="section-title">📋 Karakterler</p>', unsafe_allow_html=True)
+        for char, info in CHARACTERS.items():
+            vid = VOICE_IDS.get(char, "")
+            is_set = bool(vid and vid not in ("KENDI_SES_ID_BURAYA", ""))
+            dot = "🟢" if is_set else "🔴"
+            st.markdown(f"{dot} {info['emoji']} **{char}**")
+
+        if api and st.button("🎧 Sesleri Listele", use_container_width=True):
+            with st.spinner("Yükleniyor..."):
+                voices = api.list_voices()
+                if voices:
+                    st.markdown("**Mevcut Sesler:**")
+                    for v in voices[:10]:
+                        st.code(f"{v['name']}: {v['voice_id']}", language=None)
+                else:
+                    st.info("Ses bulunamadı veya API hatası.")
+
+        st.markdown("---")
+        st.caption("v1.0.0 | ElevenLabs TTS")
+
+    return api, stability, similarity
+
+
+def generate_podcast(segments: list[dict], api: ElevenLabsAPI,
+                     stability: float, similarity: float) -> list[dict]:
+    """Her segment için ses üretir."""
+    audio_segments = []
+    total = len(segments)
+
+    progress_bar = st.progress(0, text="Hazırlanıyor...")
+    status_placeholder = st.empty()
+
+    for i, seg in enumerate(segments):
+        char = seg["character"]
+        voice_id = VOICE_IDS.get(char)
+
+        if not voice_id or voice_id in ("KENDI_SES_ID_BURAYA", ""):
+            status_placeholder.warning(f"⚠️ {char} için ses ID tanımlanmamış, atlanıyor.")
+            audio_segments.append({**seg, "audio": None, "skipped": True})
+        else:
+            status_placeholder.markdown(
+                f'<span class="pulse">🎙️ {seg["emoji"]} {char} seslendiriliyor... ({i+1}/{total})</span>',
+                unsafe_allow_html=True
+            )
+            audio_data = api.text_to_speech(seg["text"], voice_id, stability, similarity)
+            audio_segments.append({**seg, "audio": audio_data, "skipped": False})
+            time.sleep(0.5)  # Rate limiting
+
+        progress_bar.progress((i + 1) / total, text=f"{i+1}/{total} segment tamamlandı")
+
+    status_placeholder.success(f"✅ {total} segmentin seslendirmesi tamamlandı!")
+    return audio_segments
+
+
+def combine_audio(audio_segments: list[dict]) -> Optional[bytes]:
+    """Tüm ses parçalarını birleştirir (ham MP3 bytes concat)."""
+    combined = b""
+    for seg in audio_segments:
+        if seg.get("audio"):
+            combined += seg["audio"]
+    return combined if combined else None
+
+
+def main():
+    st.set_page_config(
+        page_title="3 Soru 3 Dakika",
+        page_icon="🎙️",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+    UIComponents.inject_css()
+    init_session_state()
+
+    # Sidebar
+    api, stability, similarity = render_sidebar()
+
     # Header
     st.markdown("""
-        <div class="app-header">
-            <h1>🎙️ 3 SORU 3 DAKİKA</h1>
-            <p>Profesyonel Yapay Zeka Podcast Stüdyosu</p>
-        </div>
+    <div class="main-header">
+        <h1>🎙️ 3 Soru 3 Dakika</h1>
+        <p>Kendi klonlanmış sesinizle çok karakterli podcast oluşturun</p>
+    </div>
     """, unsafe_allow_html=True)
-    
-    # Sidebar
-    with st.sidebar:
-        st.markdown("""
-            <div style="
-                background: rgba(255,255,255,0.1);
-                padding: 20px;
-                border-radius: 15px;
-                margin-bottom: 20px;
-                text-align: center;
-            ">
-                <h3 style="color: white; margin: 0;">⚙️ STUDIO KONTROL</h3>
-            </div>
-        """, unsafe_allow_html=True)
-        
-        # API Key girişi
-        api_key = st.text_input(
-            "🔑 ELEVENLABS API KEY",
-            type="password",
-            placeholder="sk_...",
-            help="ElevenLabs API anahtarınızı girin"
-        )
-        
-        if api_key:
-            st.session_state.api_key_valid = True
-            st.success("✅ API key doğrulandı")
-        else:
-            st.session_state.api_key_valid = False
-            st.warning("⚠️ API key gerekli")
-        
-        st.markdown("<hr style='border-color: rgba(255,255,255,0.1);'>", unsafe_allow_html=True)
-        
-        # Ses ayarları
-        st.markdown("""
-            <div style="
-                background: rgba(255,255,255,0.05);
-                padding: 15px;
-                border-radius: 10px;
-                margin-bottom: 15px;
-            ">
-                <h4 style="color: white; margin: 0;">🎤 SES AYARLARI</h4>
-            </div>
-        """, unsafe_allow_html=True)
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            stability = st.slider(
-                "Stabilite",
-                0.0, 1.0, 0.5,
-                help="Düşük: dinamik | Yüksek: stabil"
-            )
-        with col2:
-            similarity = st.slider(
-                "Benzerlik",
-                0.0, 1.0, 0.75,
-                help="Orijinal sese benzerlik"
-            )
-        
-        st.markdown("<hr style='border-color: rgba(255,255,255,0.1);'>", unsafe_allow_html=True)
-        
-        # Karakter listesi
-        st.markdown("""
-            <div style="
-                background: rgba(255,255,255,0.05);
-                padding: 15px;
-                border-radius: 10px;
-                margin-bottom: 15px;
-            ">
-                <h4 style="color: white; margin: 0;">🎭 KARAKTERLER</h4>
-            </div>
-        """, unsafe_allow_html=True)
-        
-        for char, info in Config.CHARACTERS.items():
-            st.markdown(f"""
-                <div style="
-                    background: {info['bg']};
-                    padding: 8px 12px;
-                    margin: 5px 0;
-                    border-radius: 8px;
-                    border-left: 3px solid {info['color']};
-                ">
-                    <span style="color: {info['color']};">{info['emoji']} {char}</span>
-                    <span style="color: #BDC3C7; font-size: 0.8rem; float: right;">
-                        {info['description']}
-                    </span>
-                </div>
-            """, unsafe_allow_html=True)
-        
-        st.markdown("<hr style='border-color: rgba(255,255,255,0.1);'>", unsafe_allow_html=True)
-        
-        # İstatistikler
-        if st.session_state.success_count > 0 or st.session_state.error_count > 0:
-            st.markdown("""
-                <div style="
-                    background: rgba(255,255,255,0.05);
-                    padding: 15px;
-                    border-radius: 10px;
-                ">
-                    <h4 style="color: white; margin: 0 0 10px 0;">📊 SİSTEM DURUMU</h4>
-                </div>
-            """, unsafe_allow_html=True)
-            
-            col_s1, col_s2 = st.columns(2)
-            with col_s1:
-                st.markdown(f"""
-                    <div style="text-align: center; background: #2ECC7115; padding: 10px; border-radius: 8px;">
-                        <div style="color: #2ECC71; font-size: 1.5rem;">✓</div>
-                        <div style="color: white;">{st.session_state.success_count}</div>
-                    </div>
-                """, unsafe_allow_html=True)
-            with col_s2:
-                st.markdown(f"""
-                    <div style="text-align: center; background: #E74C3C15; padding: 10px; border-radius: 8px;">
-                        <div style="color: #E74C3C; font-size: 1.5rem;">✗</div>
-                        <div style="color: white;">{st.session_state.error_count}</div>
-                    </div>
-                """, unsafe_allow_html=True)
-    
-    # Ana içerik - 2 kolon
+
+    # Ana layout
     col_left, col_right = st.columns([1, 1], gap="large")
-    
+
+    # ── SOL PANEL: Metin Girişi ──
     with col_left:
-        st.markdown("""
-            <div style="
-                background: linear-gradient(90deg, #F8F9FA, #FFFFFF);
-                padding: 20px;
-                border-radius: 20px;
-                margin-bottom: 20px;
-            ">
-                <h2 style="margin: 0; color: #2C3E50;">
-                    📝 SENARYO DÜZENLEYİCİ
-                </h2>
+        st.markdown('<p class="section-title">📝 Senaryo</p>', unsafe_allow_html=True)
+
+        # Şablonlar
+        st.markdown('<p class="section-title">📂 Hazır Şablonlar</p>', unsafe_allow_html=True)
+        t_cols = st.columns(2)
+        for idx, (label, content) in enumerate(TEMPLATES.items()):
+            with t_cols[idx % 2]:
+                if st.button(label, use_container_width=True):
+                    st.session_state["template_text"] = content
+
+        script_value = st.session_state.get("template_text", "")
+        script = st.text_area(
+            "Senaryo Metni",
+            value=script_value,
+            height=400,
+            placeholder="Sunucu: Merhaba!\nKonuk: Merhaba!\nDış Ses: Bugünkü konu...",
+            label_visibility="collapsed",
+        )
+
+        # İstatistikler
+        if script.strip():
+            word_count = ScriptParser.count_words(script)
+            duration   = ScriptParser.estimate_duration(word_count)
+            parser     = ScriptParser(CHARACTERS)
+            segs       = parser.parse(script)
+            chars_used = list({s["character"] for s in segs})
+
+            st.markdown(f"""
+            <div class="stats-bar">
+                <div class="stat-item">📊 <strong>{word_count}</strong> kelime</div>
+                <div class="stat-item">⏱️ ~<strong>{duration}</strong></div>
+                <div class="stat-item">👥 <strong>{len(segs)}</strong> satır</div>
+                <div class="stat-item">🎭 <strong>{len(chars_used)}</strong> karakter</div>
             </div>
-        """, unsafe_allow_html=True)
-        
-        # Şablon seçici
-        template = st.selectbox(
-            "Hazır Şablon Seçin",
-            ["Boş", "Röportaj", "Haber Bülteni", "Eğitim Podcast", "Hikaye Anlatımı", "Teknoloji"],
-            key="template_selector"
-        )
-        
-        templates = {
-            "Boş": "",
-            "Röportaj": """Sunucu: Merhaba ve podcastimize hoş geldiniz! Bugün konuğumuz yapay zeka uzmanı Dr. Mehmet Demir.
-Konuk: Merhaba, ben de burada olmaktan büyük mutluluk duyuyorum.
-Sunucu: Yapay zeka son yıllarda çok hızlı gelişiyor. Sizce bu gelişim insanlık için ne anlama geliyor?
-Konuk: Yapay zeka, insanlık tarihinin en büyük dönüşümlerinden birini başlatıyor.
-Uzman: Özellikle sağlık sektöründe devrim niteliğinde gelişmeler var.
-Sunucu: Peki ya etik endişeler? Bu konuda neler söylemek istersiniz?
-Konuk: Etik kurallar çok önemli. Yapay zekayı doğru yönlendirmeliyiz.
-Dış Ses: Değerli dinleyiciler, podcast'imize kısa bir ara veriyoruz.""",
-            
-            "Haber Bülteni": """Sunucu: Bugün 17 Şubat 2026, işte günün önemli başlıkları...
-Raportör: Ekonomi: Borsa endeksi yüzde 2 yükselişle günü tamamladı.
-Raportör: Spor: Milli takımımız hazırlık maçında galip geldi.
-Dış Ses: Son dakika gelişmesi! Yeni yapay zeka yasası mecliste kabul edildi.
-Sunucu: Detaylar haber bültenimizin devamında.""",
-            
-            "Eğitim Podcast": """Sunucu: Bugünkü bölümümüzde Python programlamaya giriş yapıyoruz.
-Uzman: Değişkenler programlamanın temel yapı taşlarıdır.
-Sunucu: Peki fonksiyonlar neden bu kadar önemli?
-Uzman: Fonksiyonlar kod tekrarını önler ve daha düzenli kod yazmamızı sağlar.
-Dış Ses: Öğrenme zamanı! Bugün öğrendiklerinizi mutlaka pratik yapın.""",
-            
-            "Hikaye Anlatımı": """Dış Ses: Bir varmış bir yokmuş, evvel zaman içinde...
-Sunucu: Genç bir kaşif, kayıp bir şehrin peşine düşmüş.
-Konuk: Yıllardır bu anı bekliyordum. Macera başlıyor!
-Sunucu: Derin ormanlar, yüksek dağlar aşmışlar.
-Dış Ses: Ve böylece unutulmaz bir serüven başlamış oldu.""",
-            
-            "Teknoloji": """Sunucu: Teknoloji gündemine hoş geldiniz! Bugün yapay zeka konuşacağız.
-Uzman: Son çıkan yapay zeka modelleri insan seviyesine yaklaşıyor.
-Sunucu: Bu teknolojiler günlük hayatımızı nasıl etkileyecek?
-Uzman: Sağlıktan eğitime, finanstan üretime her alanda devrim yaşanacak.
-Dış Ses: Teknoloji dünyasından son gelişmeler..."""
-        }
-        
-        # Metin girişi
-        text_input = st.text_area(
-            "Senaryonuzu girin:",
-            value=templates.get(template, ""),
-            height=350,
-            placeholder="Örnek: Sunucu: Merhaba!\nKonuk: Selam!"
-        )
-        
-        # Parse ve analiz
-        if text_input:
-            parsed_lines = ScriptParser.parse(text_input)
-            
-            if parsed_lines:
-                # Metrikler
-                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-                
-                with col_m1:
-                    total_lines = len(parsed_lines)
-                    st.markdown(UIComponents.stats_card(
-                        "Toplam Satır",
-                        str(total_lines),
-                        "📝",
-                        "#3498DB"
-                    ), unsafe_allow_html=True)
-                
-                with col_m2:
-                    total_words = sum(len(line['text'].split()) for line in parsed_lines)
-                    st.markdown(UIComponents.stats_card(
-                        "Kelime",
-                        str(total_words),
-                        "📊",
-                        "#2ECC71"
-                    ), unsafe_allow_html=True)
-                
-                with col_m3:
-                    unique_chars = len(set(line['character'] for line in parsed_lines))
-                    st.markdown(UIComponents.stats_card(
-                        "Karakter",
-                        str(unique_chars),
-                        "🎭",
-                        "#E74C3C"
-                    ), unsafe_allow_html=True)
-                
-                with col_m4:
-                    est_duration = total_words / 150  # dakikada 150 kelime
-                    st.markdown(UIComponents.stats_card(
-                        "Tahmini Süre",
-                        f"{est_duration:.1f} dk",
-                        "⏱️",
-                        "#F39C12"
-                    ), unsafe_allow_html=True)
-                
-                st.markdown("<div class='custom-divider'></div>", unsafe_allow_html=True)
-                
-                # Önizleme
-                st.markdown("**🔍 SENARYO ÖNİZLEME**")
-                
-                for i, line in enumerate(parsed_lines[:5]):
-                    st.markdown(
-                        UIComponents.character_card(
-                            line['character'],
-                            line['text'][:100] + "..." if len(line['text']) > 100 else line['text']
-                        ),
-                        unsafe_allow_html=True
-                    )
-                
-                if len(parsed_lines) > 5:
-                    st.info(f"ve {len(parsed_lines) - 5} satır daha...")
-            else:
-                st.warning("⚠️ Geçerli bir senaryo girin")
-    
-    with col_right:
-        st.markdown("""
-            <div style="
-                background: linear-gradient(90deg, #F8F9FA, #FFFFFF);
-                padding: 20px;
-                border-radius: 20px;
-                margin-bottom: 20px;
-            ">
-                <h2 style="margin: 0; color: #2C3E50;">
-                    🎧 PODCAST STUDIO
-                </h2>
-            </div>
-        """, unsafe_allow_html=True)
-        
-        # Oluşturma butonu
-        generate_button = st.button(
-            "🎙️ PODCAST OLUŞTUR",
-            disabled=not (api_key and text_input and not st.session_state.processing),
-            use_container_width=True
-        )
-        
-        if generate_button:
-            if not api_key:
-                st.markdown("""
-                    <div class="error-box">
-                        ❌ API anahtarı gerekli!
-                    </div>
-                """, unsafe_allow_html=True)
-            elif not text_input:
-                st.markdown("""
-                    <div class="error-box">
-                        ❌ Lütfen bir senaryo girin!
-                    </div>
-                """, unsafe_allow_html=True)
-            else:
-                # Parse et
-                parsed_lines = ScriptParser.parse(text_input)
-                
-                # Validate
-                is_valid, error_msg = ScriptParser.validate(parsed_lines)
-                
-                if not is_valid:
-                    st.markdown(f"""
-                        <div class="error-box">
-                            ❌ {error_msg}
-                        </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    # İşleme başla
-                    st.session_state.processing = True
-                    
-                    try:
-                        # API istemcisi
-                        api = ElevenLabsAPI(api_key)
-                        
-                        # Progress container
-                        progress_container = st.container()
-                        
-                        with progress_container:
-                            st.markdown("""
-                                <div class="info-box">
-                                    🎵 Podcast oluşturuluyor...
-                                </div>
-                            """, unsafe_allow_html=True)
-                            
-                            # Progress bar
-                            progress_bar = st.progress(0)
-                            status_text = st.empty()
-                            
-                            # Sesleri oluştur
-                            audio_segments = []
-                            errors = []
-                            
-                            for i, line in enumerate(parsed_lines):
-                                # Status güncelle
-                                status_text.info(
-                                    f"📢 {line['character']}: {line['text'][:50]}..."
-                                )
-                                
-                                try:
-                                    audio = api.text_to_speech(
-                                        line['text'],
-                                        line['voice_id'],
-                                        stability,
-                                        similarity
-                                    )
-                                    
-                                    if audio:
-                                        audio_segments.append({
-                                            'audio': audio,
-                                            'character': line['character'],
-                                            'text': line['text']
-                                        })
-                                        st.session_state.success_count += 1
-                                    else:
-                                        errors.append(f"{line['character']}: Ses oluşturulamadı")
-                                        st.session_state.error_count += 1
-                                        
-                                except Exception as e:
-                                    errors.append(f"{line['character']}: {str(e)}")
-                                    st.session_state.error_count += 1
-                                
-                                # Progress bar güncelle
-                                progress_bar.progress((i + 1) / len(parsed_lines))
-                                
-                                # Rate limiting
-                                time.sleep(Config.REQUEST_DELAY)
-                            
-                            # Progress temizle
-                            progress_bar.empty()
-                            status_text.empty()
-                            
-                            if audio_segments:
-                                # Başarılı
-                                st.session_state.current_audio = audio_segments[-1]['audio']
-                                st.session_state.generated_segments = audio_segments
-                                
-                                st.markdown("""
-                                    <div class="success-box">
-                                        <strong>✅ PODCAST BAŞARIYLA OLUŞTURULDU!</strong><br>
-                                        Ses dosyaları hazır.
-                                    </div>
-                                """, unsafe_allow_html=True)
-                                
-                                # Hata varsa göster
-                                if errors:
-                                    with st.expander("⚠️ Hata Detayları"):
-                                        for error in errors[:5]:
-                                            st.error(error)
-                                
-                                # Ses segmentlerini göster
-                                st.markdown("### 🔊 SES SEGMENTLERİ")
-                                
-                                for i, seg in enumerate(audio_segments):
-                                    with st.expander(f"{i+1}. {seg['character']}", expanded=i==0):
-                                        st.markdown(
-                                            UIComponents.character_card(
-                                                seg['character'],
-                                                seg['text'][:100] + "...",
-                                                True
-                                            ),
-                                            unsafe_allow_html=True
-                                        )
-                                        st.audio(seg['audio'], format="audio/mp3")
-                                
-                                # Toplu indirme
-                                if len(audio_segments) == 1:
-                                    st.markdown("### ▶️ PODCAST OYNATICI")
-                                    st.audio(audio_segments[0]['audio'], format="audio/mp3")
-                                    
-                                    st.download_button(
-                                        label="📥 MP3 İNDİR",
-                                        data=audio_segments[0]['audio'],
-                                        file_name=f"podcast_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp3",
-                                        mime="audio/mp3"
-                                    )
-                                else:
-                                    st.info("""
-                                        ℹ️ Ses birleştirme için FFmpeg gerekli.
-                                        Her ses parçasını ayrı ayrı dinleyebilirsiniz.
-                                    """)
-                                
-                                # Geçmişe ekle
-                                st.session_state.podcast_history.append({
-                                    'date': datetime.now().strftime("%Y-%m-%d %H:%M"),
-                                    'segments': len(audio_segments),
-                                    'errors': len(errors)
-                                })
-                            
-                            else:
-                                st.markdown("""
-                                    <div class="error-box">
-                                        ❌ Hiç ses dosyası oluşturulamadı!
-                                    </div>
-                                """, unsafe_allow_html=True)
-                    
-                    except Exception as e:
-                        st.markdown(f"""
-                            <div class="error-box">
-                                ❌ SİSTEM HATASI: {str(e)}
-                            </div>
-                        """, unsafe_allow_html=True)
-                        logger.error(f"Podcast oluşturma hatası: {str(e)}")
-                    
-                    finally:
-                        st.session_state.processing = False
-        
-        # Mevcut podcast göster
-        elif st.session_state.current_audio and not st.session_state.processing:
-            st.markdown("### ▶️ SON PODCAST")
-            st.audio(st.session_state.current_audio, format="audio/mp3")
-            
-            st.download_button(
-                label="📥 MP3 İNDİR",
-                data=st.session_state.current_audio,
-                file_name=f"podcast_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp3",
-                mime="audio/mp3"
-            )
-            
-            # Geçmiş
-            if st.session_state.generated_segments:
-                with st.expander("📋 SEGMENTLER"):
-                    for seg in st.session_state.generated_segments[-3:]:
-                        st.markdown(
-                            UIComponents.character_card(
-                                seg['character'],
-                                seg['text'][:50] + "..."
-                            ),
-                            unsafe_allow_html=True
-                        )
-        
-        else:
-            st.markdown("""
-                <div style="
-                    background: #F8F9FA;
-                    border: 2px dashed #BDC3C7;
-                    border-radius: 20px;
-                    padding: 40px;
-                    text-align: center;
-                ">
-                    <div style="font-size: 4rem; margin-bottom: 20px;">🎙️</div>
-                    <h3 style="color: #2C3E50;">Podcast Stüdyosu Hazır</h3>
-                    <p style="color: #7F8C8D;">
-                        Senaryonuzu yazın ve oluşturmaya başlayın
-                    </p>
-                </div>
             """, unsafe_allow_html=True)
-        
+
+            # Ön izleme
+            st.markdown('<p class="section-title">👁️ Önizleme</p>', unsafe_allow_html=True)
+            for i, seg in enumerate(segs):
+                UIComponents.render_segment_card(seg, i)
+
+    # ── SAĞ PANEL: Çıktı ──
+    with col_right:
+        st.markdown('<p class="section-title">🎧 Podcast Çıktısı</p>', unsafe_allow_html=True)
+
+        # Ses durumu
+        UIComponents.render_voice_status(VOICE_IDS, api)
+
+        st.markdown("---")
+
+        btn_col1, btn_col2 = st.columns(2)
+        generate_btn = btn_col1.button("🚀 Podcast Oluştur", use_container_width=True, type="primary")
+        clear_btn    = btn_col2.button("🗑️ Temizle", use_container_width=True)
+
+        if clear_btn:
+            st.session_state.audio_segments = []
+            st.session_state.full_audio = None
+            st.session_state.parsed_segments = []
+            if "template_text" in st.session_state:
+                del st.session_state["template_text"]
+            st.rerun()
+
+        if generate_btn:
+            if not api:
+                st.error("❌ Lütfen önce ElevenLabs API anahtarınızı girin ve bağlanın.")
+            elif not script.strip():
+                st.warning("⚠️ Senaryo metni boş. Lütfen bir metin girin.")
+            else:
+                parser = ScriptParser(CHARACTERS)
+                segs   = parser.parse(script)
+                st.session_state.parsed_segments = segs
+
+                # Geçerli voice ID kontrolü
+                valid_chars = [
+                    s["character"] for s in segs
+                    if VOICE_IDS.get(s["character"], "") not in ("KENDI_SES_ID_BURAYA", "")
+                ]
+                if not valid_chars:
+                    st.error("❌ Hiçbir karakter için geçerli ses ID tanımlanmamış. Lütfen VOICE_IDS bölümünü güncelleyin.")
+                else:
+                    with st.container():
+                        audio_segs = generate_podcast(segs, api, stability, similarity)
+                        st.session_state.audio_segments = audio_segs
+                        combined = combine_audio(audio_segs)
+                        st.session_state.full_audio = combined
+
+                        # Geçmişe ekle
+                        preview = script[:60] + "..." if len(script) > 60 else script
+                        st.session_state.podcast_history.append({
+                            "preview": preview,
+                            "segment_count": len(segs),
+                        })
+
+        # Ses segmentleri
+        if st.session_state.audio_segments:
+            st.markdown("---")
+            st.markdown('<p class="section-title">🎵 Ses Segmentleri</p>', unsafe_allow_html=True)
+
+            for i, seg in enumerate(st.session_state.audio_segments):
+                with st.expander(f"{seg['emoji']} {seg['character']}: {seg['text'][:50]}...", expanded=False):
+                    if seg.get("audio"):
+                        st.audio(seg["audio"], format="audio/mp3")
+                    else:
+                        st.caption("⚠️ Bu segment için ses üretilemedi.")
+
+            # Tam podcast
+            if st.session_state.full_audio:
+                st.markdown("---")
+                st.markdown('<p class="section-title">📥 Tam Podcast</p>', unsafe_allow_html=True)
+                st.audio(st.session_state.full_audio, format="audio/mp3")
+                st.download_button(
+                    label="⬇️ MP3 İndir",
+                    data=st.session_state.full_audio,
+                    file_name="podcast.mp3",
+                    mime="audio/mpeg",
+                    use_container_width=True,
+                )
+
         # Geçmiş
         if st.session_state.podcast_history:
-            with st.expander("📜 PODCAST GEÇMİŞİ"):
-                for i, podcast in enumerate(st.session_state.podcast_history[-5:]):
-                    st.markdown(f"""
-                        <div style="
-                            background: #F8F9FA;
-                            padding: 10px;
-                            margin: 5px 0;
-                            border-radius: 8px;
-                        ">
-                            <span style="color: #3498DB;">{podcast['date']}</span>
-                            <span style="color: #7F8C8D; float: right;">
-                                {podcast['segments']} segment
-                            </span>
-                        </div>
-                    """, unsafe_allow_html=True)
+            st.markdown("---")
+            st.markdown('<p class="section-title">📜 Podcast Geçmişi</p>', unsafe_allow_html=True)
+            for h in reversed(st.session_state.podcast_history[-5:]):
+                st.markdown(f"🎙️ *{h['preview']}* — {h['segment_count']} satır")
+
 
 if __name__ == "__main__":
     main()
