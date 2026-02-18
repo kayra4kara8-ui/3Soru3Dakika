@@ -226,7 +226,17 @@ class ElevenLabsAPI:
                 cc = d.get("subscription", {}).get("character_count", "?")
                 cl = d.get("subscription", {}).get("character_limit", "?")
                 return True, f"{nm} — Karakter: {cc}/{cl}"
-            return False, f"Hata {r.status_code}: {r.text[:80]}"
+            # Hata mesajını JSON'dan düzgün çek
+            try:
+                err_json = r.json()
+                detail   = err_json.get("detail", {})
+                if isinstance(detail, dict):
+                    err_msg = detail.get("message", r.text[:120])
+                else:
+                    err_msg = str(detail)[:120]
+            except Exception:
+                err_msg = r.text[:120]
+            return False, f"Hata {r.status_code}: {err_msg}"
         except Exception as e:
             return False, f"Baglanti hatasi: {e}"
 
@@ -908,16 +918,64 @@ def sidebar() -> tuple:
         st.markdown("---")
 
         st.markdown('<p class="sct">🔑 ElevenLabs API</p>', unsafe_allow_html=True)
-        key = st.text_input("API Anahtarı", type="password", placeholder="xi-...")
+
+        # API key'i session_state'de sakla — sayfa yenilenince kaybolmasın
+        if "api_key" not in st.session_state:
+            st.session_state.api_key = ""
+
+        key = st.text_input(
+            "API Anahtarı",
+            type="password",
+            placeholder="xi-...",
+            value=st.session_state.api_key,
+        )
+        if key:
+            st.session_state.api_key = key
+
+        # Nasıl alınır yardımı
+        with st.expander("❓ API anahtarını nereden alırım?"):
+            st.markdown(
+                "1. [elevenlabs.io](https://elevenlabs.io) → kayıt ol (ücretsiz)\n"
+                "2. Sağ üstteki profil ikonu → **Profile + API Key**\n"
+                "3. Anahtarı kopyala, buraya yapıştır\n\n"
+                "**Ücretsiz plan:** aylık 10.000 karakter"
+            )
+
         api = None
         if key:
             if st.button("🔌 Bağlan", use_container_width=True):
-                el = ElevenLabsAPI(key)
-                ok, msg = el.check()
-                st.session_state.api_ok = ok
-                st.success(f"✅ {msg}") if ok else st.error(f"❌ {msg}")
-            if st.session_state.api_ok:
-                api = ElevenLabsAPI(key)
+                st.session_state.api_ok = False  # reset before check
+                st.session_state.api_msg = ""
+                try:
+                    el = ElevenLabsAPI(key.strip())
+                    ok, msg = el.check()
+                    st.session_state.api_ok  = ok
+                    st.session_state.api_msg = str(msg)
+                except Exception as e:
+                    st.session_state.api_ok  = False
+                    st.session_state.api_msg = f"Bağlantı hatası: {e}"
+
+            # Bağlantı sonucunu göster
+            msg = st.session_state.get("api_msg", "")
+            if msg:
+                if st.session_state.api_ok:
+                    st.success(f"✅ {msg}")
+                else:
+                    # Uzun teknik mesajı temizle
+                    short_msg = str(msg).split("DeltaGenerator")[0].strip()
+                    if "401" in short_msg or "missing_permissions" in short_msg:
+                        st.error(
+                            "❌ API anahtarı geçersiz veya eksik yetki.\n\n"
+                            "**Kontrol edin:**\n"
+                            "- Anahtarı tam kopyaladınız mı? (`xi-` ile başlamalı)\n"
+                            "- Boşluk kalmış olabilir — silerek tekrar yapıştırın\n"
+                            "- ElevenLabs hesabınız aktif mi?"
+                        )
+                    else:
+                        st.error(f"❌ {short_msg[:120]}")
+
+            if st.session_state.api_ok and key:
+                api = ElevenLabsAPI(key.strip())
 
         st.markdown("---")
         st.markdown('<p class="sct">⚙️ Ses Ayarları</p>', unsafe_allow_html=True)
