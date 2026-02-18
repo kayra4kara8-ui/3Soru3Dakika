@@ -207,47 +207,147 @@ class ScriptParser:
 
 
 # ─────────────────────────────────────────────────────────
-# 4. ELEVENLABS
+# 4. TTS MOTORLARI
 # ─────────────────────────────────────────────────────────
 
+# Edge TTS Türkçe sesleri (Microsoft, ücretsiz)
+EDGE_VOICES = {
+    "Emine (Kadın)":  "tr-TR-EminNeural",
+    "Ahmet (Erkek)":  "tr-TR-AhmetNeural",
+}
+
+# Her karakter için Edge TTS ses ataması
+EDGE_CHARACTER_VOICES = {
+    "Sunucu":    "tr-TR-AhmetNeural",
+    "Konuk":     "tr-TR-EminNeural",
+    "Dis Ses":   "tr-TR-AhmetNeural",
+    "Uzman":     "tr-TR-AhmetNeural",
+    "Raportör":  "tr-TR-EminNeural",
+    "Anlatici":  "tr-TR-EminNeural",
+}
+
+
+def mp3_duration(data: bytes) -> float:
+    return max(1.5, len(data) / 16_000) if data else 3.0
+
+
+class EdgeTTS:
+    """Microsoft Edge TTS — ücretsiz, API key gerektirmez, Türkçe mükemmel."""
+
+    @staticmethod
+    def available() -> bool:
+        try:
+            import edge_tts  # noqa
+            return True
+        except ImportError:
+            return False
+
+    @staticmethod
+    def synthesize(text: str, voice: str) -> Optional[bytes]:
+        """Senkron wrapper — edge_tts async'ini çalıştırır."""
+        try:
+            import edge_tts
+            import asyncio
+
+            async def _run():
+                communicate = edge_tts.Communicate(text, voice)
+                buf = io.BytesIO()
+                async for chunk in communicate.stream():
+                    if chunk["type"] == "audio":
+                        buf.write(chunk["data"])
+                return buf.getvalue()
+
+            # Mevcut event loop varsa yeni thread'de çalıştır
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as pool:
+                        future = pool.submit(asyncio.run, _run())
+                        return future.result(timeout=30)
+                else:
+                    return loop.run_until_complete(_run())
+            except RuntimeError:
+                return asyncio.run(_run())
+        except Exception as e:
+            st.warning(f"Edge TTS hatası: {e}")
+            return None
+
+
+class GTTS:
+    """Google TTS — ücretsiz, basit, Türkçe destekler."""
+
+    @staticmethod
+    def available() -> bool:
+        try:
+            from gtts import gTTS  # noqa
+            return True
+        except ImportError:
+            return False
+
+    @staticmethod
+    def synthesize(text: str) -> Optional[bytes]:
+        try:
+            from gtts import gTTS
+            buf = io.BytesIO()
+            tts = gTTS(text=text, lang="tr", slow=False)
+            tts.write_to_fp(buf)
+            buf.seek(0)
+            return buf.read()
+        except Exception as e:
+            st.warning(f"gTTS hatası: {e}")
+            return None
+
+
+class OpenAITTS:
+    """OpenAI TTS — ücretli ama çok kaliteli."""
+
+    def __init__(self, key: str):
+        self.key = key.strip()
+
+    def available(self) -> bool:
+        return bool(self.key)
+
+    def synthesize(self, text: str, voice: str = "onyx") -> Optional[bytes]:
+        try:
+            r = requests.post(
+                "https://api.openai.com/v1/audio/speech",
+                headers={"Authorization": f"Bearer {self.key}",
+                         "Content-Type": "application/json"},
+                json={"model": "tts-1", "input": text, "voice": voice},
+                timeout=60,
+            )
+            return r.content if r.status_code == 200 else None
+        except Exception as e:
+            st.warning(f"OpenAI TTS hatası: {e}")
+            return None
+
+
 class ElevenLabsAPI:
+    """ElevenLabs — klon ses için, opsiyonel."""
     BASE = "https://api.elevenlabs.io/v1"
 
     def __init__(self, key: str):
         self.key = key.strip()
-        # ElevenLabs iki format kullanıyor:
-        # Yeni format: sk_... → Authorization: Bearer sk_...
-        # Eski format: xi-... → xi-api-key: xi-...
-        if self.key.startswith("sk_"):
-            self.h = {
-                "xi-api-key": self.key,
-                "Authorization": f"Bearer {self.key}",
-            }
-        else:
-            self.h = {"xi-api-key": self.key}
+        self.h = {
+            "xi-api-key": self.key,
+            **({"Authorization": f"Bearer {self.key}"} if self.key.startswith("sk_") else {}),
+        }
 
     def check(self) -> tuple[bool, str]:
         try:
-            # /v1/user bazı sk_ anahtarlarında 401 veriyor, /v1/voices daha güvenilir
             r = requests.get(f"{self.BASE}/voices", headers=self.h, timeout=10)
             if r.status_code == 200:
                 voices = r.json().get("voices", [])
-                count  = len(voices)
-                names  = ", ".join(v["name"] for v in voices[:3])
-                return True, f"Bağlandı ✓ — {count} ses bulundu ({names}...)"
-            # Hata mesajını JSON'dan düzgün çek
+                return True, f"{len(voices)} ses bulundu"
             try:
-                err_json = r.json()
-                detail   = err_json.get("detail", {})
-                if isinstance(detail, dict):
-                    err_msg = detail.get("message", r.text[:120])
-                else:
-                    err_msg = str(detail)[:120]
+                detail = r.json().get("detail", {})
+                msg = detail.get("message", r.text[:100]) if isinstance(detail, dict) else str(detail)[:100]
             except Exception:
-                err_msg = r.text[:120]
-            return False, f"Hata {r.status_code}: {err_msg}"
+                msg = r.text[:100]
+            return False, f"Hata {r.status_code}: {msg}"
         except Exception as e:
-            return False, f"Baglanti hatasi: {e}"
+            return False, str(e)[:100]
 
     def list_voices(self) -> list[dict]:
         try:
@@ -256,26 +356,18 @@ class ElevenLabsAPI:
         except:
             return []
 
-    def tts(self, text: str, voice_id: str, stab: float, sim: float) -> Optional[bytes]:
+    def tts(self, text: str, voice_id: str, stab: float = 0.5, sim: float = 0.75) -> Optional[bytes]:
         try:
             r = requests.post(
                 f"{self.BASE}/text-to-speech/{voice_id}",
                 headers={**self.h, "Content-Type": "application/json"},
-                json={
-                    "text": text,
-                    "model_id": "eleven_multilingual_v2",
-                    "voice_settings": {"stability": stab, "similarity_boost": sim},
-                },
+                json={"text": text, "model_id": "eleven_multilingual_v2",
+                      "voice_settings": {"stability": stab, "similarity_boost": sim}},
                 timeout=60,
             )
             return r.content if r.status_code == 200 else None
         except:
             return None
-
-    @staticmethod
-    def mp3_duration(data: bytes) -> float:
-        """128 kbps varsayımıyla tahmini süre."""
-        return max(1.5, len(data) / 16_000) if data else 3.0
 
 
 # ─────────────────────────────────────────────────────────
@@ -922,99 +1014,133 @@ def init_state():
 
 
 def sidebar() -> tuple:
+    """Sidebar — TTS motor seçimi + ayarlar. (tts_engine, tts_config) döner."""
     with st.sidebar:
         st.markdown("### 🎬 3 Soru 3 Dakika")
         st.markdown("---")
 
-        st.markdown('<p class="sct">🔑 ElevenLabs API</p>', unsafe_allow_html=True)
+        # ── TTS Motor Seçimi ──────────────────────────────
+        st.markdown('<p class="sct">🎙️ Ses Motoru</p>', unsafe_allow_html=True)
 
-        # API key'i session_state'de sakla — sayfa yenilenince kaybolmasın
-        if "api_key" not in st.session_state:
-            st.session_state.api_key = ""
-
-        key = st.text_input(
-            "API Anahtarı",
-            type="password",
-            placeholder="xi-...",
-            value=st.session_state.api_key,
+        engine = st.radio(
+            "Motor",
+            ["🆓 Edge TTS (Microsoft) — Önerilen",
+             "🆓 gTTS (Google)",
+             "💳 OpenAI TTS",
+             "🎤 ElevenLabs (Klon Ses)"],
+            label_visibility="collapsed",
         )
-        if key:
-            st.session_state.api_key = key
+        tts_config = {}
 
-        # Nasıl alınır yardımı
-        with st.expander("❓ API anahtarını nereden alırım?"):
-            st.markdown(
-                "1. [elevenlabs.io](https://elevenlabs.io) → kayıt ol (ücretsiz)\n"
-                "2. Sağ üstteki profil ikonu → **Profile + API Key**\n"
-                "3. Anahtarı kopyala, buraya yapıştır\n\n"
-                "**Ücretsiz plan:** aylık 10.000 karakter"
-            )
+        # ── Edge TTS ─────────────────────────────────────
+        if "Edge" in engine:
+            tts_config["engine"] = "edge"
+            if EdgeTTS.available():
+                st.success("✅ edge-tts kurulu, hazır!")
+            else:
+                st.warning("⚠️ Kurulu değil:")
+                st.code("pip install edge-tts", language="bash")
+            st.markdown('<p class="sct">Karakter → Ses Eşlemesi</p>', unsafe_allow_html=True)
+            char_voices = {}
+            for ch in CHARACTERS:
+                default = EDGE_CHARACTER_VOICES.get(ch, "tr-TR-AhmetNeural")
+                choice  = st.selectbox(
+                    ch,
+                    list(EDGE_VOICES.keys()),
+                    index=0 if "Ahmet" in default else 1,
+                    key=f"edge_{ch}",
+                )
+                char_voices[ch] = EDGE_VOICES[choice]
+            tts_config["char_voices"] = char_voices
 
-        api = None
-        if key:
-            if st.button("🔌 Bağlan", use_container_width=True):
-                st.session_state.api_ok = False  # reset before check
-                st.session_state.api_msg = ""
+        # ── gTTS ─────────────────────────────────────────
+        elif "gTTS" in engine:
+            tts_config["engine"] = "gtts"
+            if GTTS.available():
+                st.success("✅ gtts kurulu, hazır!")
+            else:
+                st.warning("⚠️ Kurulu değil:")
+                st.code("pip install gtts", language="bash")
+            st.info("ℹ️ gTTS tüm karakterler için aynı sesi kullanır.")
+
+        # ── OpenAI TTS ───────────────────────────────────
+        elif "OpenAI" in engine:
+            tts_config["engine"] = "openai"
+            if "openai_key" not in st.session_state:
+                st.session_state.openai_key = ""
+            okey = st.text_input("OpenAI API Key", type="password",
+                                 placeholder="sk-...",
+                                 value=st.session_state.openai_key)
+            if okey:
+                st.session_state.openai_key = okey
+            tts_config["key"] = okey
+
+            OPENAI_VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
+            st.markdown('<p class="sct">Karakter → Ses</p>', unsafe_allow_html=True)
+            char_voices = {}
+            for i, ch in enumerate(CHARACTERS):
+                char_voices[ch] = st.selectbox(ch, OPENAI_VOICES,
+                                               index=i % len(OPENAI_VOICES),
+                                               key=f"oai_{ch}")
+            tts_config["char_voices"] = char_voices
+
+        # ── ElevenLabs ───────────────────────────────────
+        elif "ElevenLabs" in engine:
+            tts_config["engine"] = "elevenlabs"
+            if "el_key" not in st.session_state:
+                st.session_state.el_key = ""
+
+            el_key = st.text_input("ElevenLabs API Key", type="password",
+                                   placeholder="sk_...",
+                                   value=st.session_state.el_key)
+            if el_key:
+                st.session_state.el_key = el_key
+
+            if el_key and st.button("🔌 Bağlan", use_container_width=True):
                 try:
-                    el = ElevenLabsAPI(key.strip())
-                    ok, msg = el.check()
-                    st.session_state.api_ok  = ok
-                    st.session_state.api_msg = str(msg)
+                    api = ElevenLabsAPI(el_key)
+                    ok, msg = api.check()
+                    st.session_state.el_ok  = ok
+                    st.session_state.el_msg = msg
                 except Exception as e:
-                    st.session_state.api_ok  = False
-                    st.session_state.api_msg = f"Bağlantı hatası: {e}"
+                    st.session_state.el_ok  = False
+                    st.session_state.el_msg = str(e)
 
-            # Bağlantı sonucunu göster
-            msg = st.session_state.get("api_msg", "")
-            if msg:
-                if st.session_state.api_ok:
-                    st.success(f"✅ {msg}")
-                else:
-                    short_msg = str(msg).split("DeltaGenerator")[0].strip()
-                    if "401" in short_msg:
-                        st.error(
-                            f"❌ **401 — Yetki Hatası**\n\n"
-                            f"API yanıtı: `{short_msg}`\n\n"
-                            "**Olası sebepler:**\n"
-                            "- Anahtar yanlış kopyalanmış (başında/sonunda boşluk)\n"
-                            "- ElevenLabs hesabında email doğrulanmamış\n"
-                            "- Anahtar iptal edilmiş → yeni anahtar oluşturun"
-                        )
-                    elif "timeout" in short_msg.lower() or "connection" in short_msg.lower():
-                        st.error("❌ Bağlantı hatası — internet bağlantınızı kontrol edin.")
-                    else:
-                        st.error(f"❌ {short_msg[:200]}")
+            el_msg = st.session_state.get("el_msg", "")
+            if el_msg:
+                (st.success if st.session_state.get("el_ok") else st.error)(
+                    f"{'✅' if st.session_state.get('el_ok') else '❌'} {el_msg}"
+                )
 
-            if st.session_state.api_ok and key:
-                api = ElevenLabsAPI(key.strip())
+            tts_config["key"] = el_key
+            stab = st.slider("Kararlılık", 0.0, 1.0, 0.5, 0.05)
+            sim  = st.slider("Benzerlik",  0.0, 1.0, 0.75, 0.05)
+            tts_config["stab"] = stab
+            tts_config["sim"]  = sim
 
-        st.markdown("---")
-        st.markdown('<p class="sct">⚙️ Ses Ayarları</p>', unsafe_allow_html=True)
-        stab = st.slider("Kararlılık",  0.0, 1.0, 0.50, 0.05)
-        sim  = st.slider("Benzerlik",   0.0, 1.0, 0.75, 0.05)
+            if el_key and st.session_state.get("el_ok"):
+                if st.button("🎧 Sesleri Listele", use_container_width=True):
+                    vs = ElevenLabsAPI(el_key).list_voices()
+                    for v in vs[:15]:
+                        st.code(f"{v['name']}\n{v['voice_id']}", language=None)
 
+        # ── Ortak Ayarlar ─────────────────────────────────
         st.markdown("---")
         st.markdown('<p class="sct">🎭 Karakterler</p>', unsafe_allow_html=True)
         for ch, info in CHARACTERS.items():
-            vid = VOICE_IDS.get(ch, "")
-            ok  = bool(vid and vid not in ("KENDI_SES_ID_BURAYA", ""))
-            st.markdown(f"{'🟢' if ok else '🔴'} {info['emoji']} **{ch}**")
-
-        if api:
-            if st.button("🎧 Sesleri Listele", use_container_width=True):
-                vs = api.list_voices()
-                if vs:
-                    for v in vs[:12]:
-                        st.code(f"{v['name']}\n{v['voice_id']}", language=None)
-                else:
-                    st.info("Ses bulunamadı.")
+            st.markdown(f"{info['emoji']} **{ch}**")
 
         st.markdown("---")
-
-        # dependency status
-        st.markdown('<p class="sct">📦 Bağımlılıklar</p>', unsafe_allow_html=True)
-        for lib, name in [("PIL", "Pillow"), ("imageio", "imageio[ffmpeg]"),
-                          ("reportlab", "reportlab")]:
+        # Kurulu kütüphane durumu
+        st.markdown('<p class="sct">📦 Kütüphaneler</p>', unsafe_allow_html=True)
+        libs = [
+            ("edge_tts",  "edge-tts"),
+            ("gtts",      "gtts"),
+            ("PIL",       "Pillow"),
+            ("imageio",   "imageio[ffmpeg]"),
+            ("reportlab", "reportlab"),
+        ]
+        for lib, name in libs:
             try:
                 __import__(lib)
                 st.markdown(f"🟢 {name}")
@@ -1022,33 +1148,69 @@ def sidebar() -> tuple:
                 st.markdown(f"🔴 {name}")
 
         st.markdown("---")
-        st.caption("v3.0 | Ses + Slayt + MP4 + PDF")
+        st.caption("v3.1 | Edge/gTTS/OpenAI/ElevenLabs")
 
-    return api, stab, sim
+    return tts_config
 
 
 # ─────────────────────────────────────────────────────────
-# 11. AUDIO GENERATION
+# 11. SES ÜRETIMI — Çok Motorlu
 # ─────────────────────────────────────────────────────────
 
-def generate_audio(segs: list, api: ElevenLabsAPI, stab: float, sim: float) -> list:
+def synthesize_one(text: str, char: str, tts_config: dict) -> Optional[bytes]:
+    """Seçili TTS motoruyla tek segment seslendir."""
+    engine = tts_config.get("engine", "edge")
+
+    if engine == "edge":
+        voice = tts_config.get("char_voices", {}).get(char, "tr-TR-AhmetNeural")
+        return EdgeTTS.synthesize(text, voice)
+
+    elif engine == "gtts":
+        return GTTS.synthesize(text)
+
+    elif engine == "openai":
+        key   = tts_config.get("key", "")
+        voice = tts_config.get("char_voices", {}).get(char, "onyx")
+        if not key:
+            st.warning("OpenAI API key girilmedi.")
+            return None
+        return OpenAITTS(key).synthesize(text, voice)
+
+    elif engine == "elevenlabs":
+        key     = tts_config.get("key", "")
+        stab    = tts_config.get("stab", 0.5)
+        sim     = tts_config.get("sim", 0.75)
+        vid     = VOICE_IDS.get(char, "")
+        if not key or not vid or vid == "KENDI_SES_ID_BURAYA":
+            return None
+        return ElevenLabsAPI(key).tts(text, vid, stab, sim)
+
+    return None
+
+
+def generate_audio(segs: list, tts_config: dict) -> list:
     out = []
     n   = len(segs)
     pb  = st.progress(0, "Sesler hazırlanıyor...")
     ph  = st.empty()
 
-    for i, seg in enumerate(segs):
-        ch  = seg["character"]
-        vid = VOICE_IDS.get(ch, "")
-        ph.markdown(f"🎙️ **{seg['info']['emoji']} {ch}** seslendiriliyor… ({i+1}/{n})")
+    engine_name = {
+        "edge": "Edge TTS (Microsoft)",
+        "gtts": "Google TTS",
+        "openai": "OpenAI TTS",
+        "elevenlabs": "ElevenLabs",
+    }.get(tts_config.get("engine", "edge"), "TTS")
 
-        if not vid or vid in ("KENDI_SES_ID_BURAYA", ""):
-            out.append({**seg, "audio": None, "duration": 3.0})
-        else:
-            audio = api.tts(seg["text"], vid, stab, sim)
-            dur   = ElevenLabsAPI.mp3_duration(audio) if audio else 3.0
-            out.append({**seg, "audio": audio, "duration": dur})
-            time.sleep(0.5)
+    for i, seg in enumerate(segs):
+        ch = seg["character"]
+        ph.markdown(f"🎙️ **{seg['info']['emoji']} {ch}** — {engine_name} ile seslendiriliyor… ({i+1}/{n})")
+
+        audio = synthesize_one(seg["text"], ch, tts_config)
+        dur   = mp3_duration(audio) if audio else 3.0
+        out.append({**seg, "audio": audio, "duration": dur})
+
+        if tts_config.get("engine") in ("elevenlabs", "openai"):
+            time.sleep(0.5)  # rate limit
 
         pb.progress((i+1)/n, f"{i+1}/{n} segment")
 
@@ -1069,7 +1231,7 @@ def main():
     )
     st.markdown(CSS, unsafe_allow_html=True)
     init_state()
-    api, stab, sim = sidebar()
+    tts_config = sidebar()
 
     st.markdown(
         '<div class="hdr"><h1>🎬 3 Soru 3 Dakika</h1>'
@@ -1163,16 +1325,22 @@ def main():
                 st.rerun()
 
             if gen_btn:
-                if not api:
-                    st.error("❌ API bağlantısı yok — sol panelden bağlanın.")
-                elif not script.strip():
+                if not script.strip():
                     st.warning("⚠️ Senaryo alanı boş.")
+                elif tts_config.get("engine") == "edge" and not EdgeTTS.available():
+                    st.error("❌ edge-tts kurulu değil → `pip install edge-tts`")
+                elif tts_config.get("engine") == "gtts" and not GTTS.available():
+                    st.error("❌ gtts kurulu değil → `pip install gtts`")
+                elif tts_config.get("engine") == "openai" and not tts_config.get("key"):
+                    st.error("❌ OpenAI API key girilmedi.")
+                elif tts_config.get("engine") == "elevenlabs" and not tts_config.get("key"):
+                    st.error("❌ ElevenLabs API key girilmedi.")
                 else:
                     parser = ScriptParser()
                     segs   = parser.parse(script)
                     st.session_state.segs = segs
 
-                    asegs = generate_audio(segs, api, stab, sim)
+                    asegs = generate_audio(segs, tts_config)
                     st.session_state.audio_segs = asegs
 
                     combined = b"".join(s["audio"] for s in asegs if s.get("audio"))
