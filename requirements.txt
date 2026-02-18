@@ -2,15 +2,24 @@
 streamlit>=1.32.0
 requests>=2.31.0
 
-# ─── Görsel & Video (pip ile kurulur, sistem FFmpeg gerekmez) ───
-Pillow>=10.0.0          # Kare çizimi
-imageio[ffmpeg]>=2.34.0 # Video export — kendi FFmpeg binary'siyle gelir!
+# ─── TTS Motorları (birini seçin, hepsini kurabilirsiniz) ───
 
-# ─── PDF slaytlar ──────────────────────────────────────
+# SEÇENEK 1 — Edge TTS (Microsoft) ← ÖNERİLEN, ücretsiz, Türkçe mükemmel
+edge-tts>=6.1.0
+
+# SEÇENEK 2 — Google TTS, ücretsiz
+gtts>=2.3.2
+
+# SEÇENEK 3 — OpenAI TTS (ücretli, en kaliteli)
+# openai>=1.0.0   ← isteğe bağlı
+
+# ─── Görsel & Video ────────────────────────────────────
+Pillow>=10.0.0
+imageio[ffmpeg]>=2.34.0
+
+# ─── PDF ───────────────────────────────────────────────
 reportlab>=4.0.0
 
 # ─── Kurulum ───────────────────────────────────────────
 # pip install -r requirements.txt
-#
-# Ardından:
 # streamlit run app.py
