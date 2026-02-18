@@ -214,8 +214,17 @@ class ElevenLabsAPI:
     BASE = "https://api.elevenlabs.io/v1"
 
     def __init__(self, key: str):
-        self.key = key
-        self.h   = {"xi-api-key": key}
+        self.key = key.strip()
+        # ElevenLabs iki format kullanıyor:
+        # Yeni format: sk_... → Authorization: Bearer sk_...
+        # Eski format: xi-... → xi-api-key: xi-...
+        if self.key.startswith("sk_"):
+            self.h = {
+                "xi-api-key": self.key,
+                "Authorization": f"Bearer {self.key}",
+            }
+        else:
+            self.h = {"xi-api-key": self.key}
 
     def check(self) -> tuple[bool, str]:
         try:
@@ -967,7 +976,7 @@ def sidebar() -> tuple:
                         st.error(
                             "❌ API anahtarı geçersiz veya eksik yetki.\n\n"
                             "**Kontrol edin:**\n"
-                            "- Anahtarı tam kopyaladınız mı? (`xi-` ile başlamalı)\n"
+                            "- Anahtarı tam kopyaladınız mı? (`sk_` veya `xi-` ile başlamalı)\n"
                             "- Boşluk kalmış olabilir — silerek tekrar yapıştırın\n"
                             "- ElevenLabs hesabınız aktif mi?"
                         )
