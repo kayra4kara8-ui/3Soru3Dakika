@@ -637,7 +637,7 @@ def render_sidebar():
         st.markdown(
             '<div style="text-align:center;padding:.9rem 0 .5rem;">'
             '<div style="font-family:\'DM Serif Display\',serif;font-size:1.2rem;'
-            'color:#C9A84C;letter-spacing:.1em;">🎬 VİDEO STÜDYO</div>'
+            'color:#C9A84C;letter-spacing:.1em;">🎬 ELİF'in Yeri</div>'
             '<div style="font-size:.6rem;color:#3a4560;letter-spacing:.16em;'
             'text-transform:uppercase;margin-top:4px;">PPTX + SES → MP4</div>'
             '</div>',
