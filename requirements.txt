@@ -1,14 +1,6 @@
-# Zorunlu
-streamlit>=1.32.0
-requests>=2.31.0
-
-# Video üretimi (pip ile gelen ffmpeg, sistem kurulumu gerektirmez)
-Pillow>=10.0.0
-imageio[ffmpeg]>=2.34.0
-
-# PDF
-reportlab>=4.0.0
-
-# Kurulum:
-# pip install -r requirements.txt
-# streamlit run app.py
+streamlit
+Pillow
+imageio[ffmpeg]
+reportlab
+python-pptx
+numpy
