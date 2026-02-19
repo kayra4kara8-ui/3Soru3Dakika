@@ -2,14 +2,7 @@
 streamlit>=1.32.0
 requests>=2.31.0
 
-# TTS — gTTS varsayılan (API key gerektirmez)
-gtts>=2.3.2
-
-# İsteğe bağlı TTS alternatifleri
-edge-tts>=6.1.0       # Microsoft, Türkçe erkek+kadın ses
-# openai>=1.0.0       # OpenAI TTS (ücretli)
-
-# Görsel & Video
+# Video üretimi (pip ile gelen ffmpeg, sistem kurulumu gerektirmez)
 Pillow>=10.0.0
 imageio[ffmpeg]>=2.34.0
 
