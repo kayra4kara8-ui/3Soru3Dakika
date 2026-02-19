@@ -1,137 +1,112 @@
 """
-🎬 3 Soru 3 Dakika — Sesli Animasyonlu Sunum + MP4 + PDF
-Kendi klonlanmış sesinizle animasyonlu slaytlar, video ve PDF çıktısı.
-
-Bağımlılıklar (pip install -r requirements.txt):
-  streamlit, requests, Pillow, imageio[ffmpeg], reportlab
+🎙️ 3 Soru 3 Dakika — Profesyonel Podcast & Sunum Stüdyosu
+Kendi sesinizi yükleyin, karakterlere atayın, video ve PDF üretin.
 """
 
 import streamlit as st
 import requests
-import time
 import json
 import io
 import os
 import math
 import tempfile
+import time
+import base64
+from pathlib import Path
 from typing import Optional
 
-# ─────────────────────────────────────────────────────────
-# 1. KONFİGÜRASYON  ← Buradan düzenleyin
-# ─────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# 1. KARAKTER & RENK KONFİGÜRASYONU
+# ══════════════════════════════════════════════════════════════
 
 CHARACTERS = {
-    "Sunucu": {
-        "color": "#E74C3C",
-        "bg_rgb": (180, 30, 30),
-        "dark_rgb": (90, 12, 12),
-        "emoji": "🎤",
+    "Elif": {
+        "color":    "#C9A84C",          # Altın sarısı
+        "bg_rgb":   (140, 90, 20),
+        "dark_rgb": (40, 22, 5),
+        "emoji":    "🎤",
+        "role":     "Sunucu",
         "animation": "bounce",
-        "svg_accent": "#ff8a80",
+        "avatar_bg": "linear-gradient(135deg,#C9A84C,#8B5E10)",
     },
-    "Konuk": {
-        "color": "#3498DB",
-        "bg_rgb": (30, 100, 200),
-        "dark_rgb": (10, 40, 100),
-        "emoji": "👤",
+    "Ecem": {
+        "color":    "#4C9FCA",          # Açık mavi
+        "bg_rgb":   (20, 80, 140),
+        "dark_rgb": (5, 20, 50),
+        "emoji":    "👩‍💼",
+        "role":     "Konuk",
         "animation": "pulse",
-        "svg_accent": "#82cfff",
+        "avatar_bg": "linear-gradient(135deg,#4C9FCA,#1A4F7A)",
     },
-    "Dis Ses": {
-        "color": "#2ECC71",
-        "bg_rgb": (30, 180, 90),
-        "dark_rgb": (10, 80, 40),
-        "emoji": "🎧",
+    "Eba": {
+        "color":    "#A0C878",          # Yeşil
+        "bg_rgb":   (50, 110, 40),
+        "dark_rgb": (12, 30, 10),
+        "emoji":    "🎧",
+        "role":     "Dış Ses",
         "animation": "float",
-        "svg_accent": "#a8ffcb",
-    },
-    "Uzman": {
-        "color": "#F39C12",
-        "bg_rgb": (200, 130, 20),
-        "dark_rgb": (90, 55, 5),
-        "emoji": "👨‍🏫",
-        "animation": "shake",
-        "svg_accent": "#ffe082",
-    },
-    "Raportör": {
-        "color": "#9B59B6",
-        "bg_rgb": (140, 70, 180),
-        "dark_rgb": (60, 20, 90),
-        "emoji": "📰",
-        "animation": "bounce",
-        "svg_accent": "#e1bee7",
-    },
-    "Anlatici": {
-        "color": "#1ABC9C",
-        "bg_rgb": (20, 170, 140),
-        "dark_rgb": (8, 80, 65),
-        "emoji": "📖",
-        "animation": "pulse",
-        "svg_accent": "#b2dfdb",
+        "avatar_bg": "linear-gradient(135deg,#A0C878,#3D6E20)",
     },
 }
 
-VOICE_IDS = {
-    "Sunucu":    "KENDI_SES_ID_BURAYA",
-    "Konuk":     "KENDI_SES_ID_BURAYA",
-    "Dis Ses":   "KENDI_SES_ID_BURAYA",
-    "Uzman":     "KENDI_SES_ID_BURAYA",
-    "Raportör":  "KENDI_SES_ID_BURAYA",
-    "Anlatici":  "KENDI_SES_ID_BURAYA",
-}
-
-FALLBACK_COLORS = [
-    ("#FF6B6B", (220, 80, 80),  (100, 20, 20)),
-    ("#4ECDC4", (60, 180, 170), (15, 80, 75)),
-    ("#F7DC6F", (220, 200, 80), (100, 90, 20)),
-    ("#BB8FCE", (160, 110, 190),(70, 40, 95)),
-    ("#82E0AA", (100, 200, 140),(30, 90, 55)),
+# Yedek renkler (ek karakterler için)
+FALLBACK = [
+    ("#E07B7B", (160,60,60),   (50,15,15)),
+    ("#B57FCC", (130,70,180),  (40,15,60)),
+    ("#7EC8C8", (50,160,160),  (10,55,55)),
 ]
 
 TEMPLATES = {
-    "🎤 Röportaj": (
-        "Sunucu: Merhaba ve podcastimize hos geldiniz! Bugun cok ozel bir konugumuz var.\n"
-        "Konuk: Merhaba! Burada olmaktan gercekten mutluyum.\n"
-        "Dis Ses: Bugunku konumuz yapay zekanin gelecegi.\n"
-        "Sunucu: Peki, yapay zeka hayatimizi nasil degistirecek?\n"
-        "Konuk: Inanilmaz gelismeler yasaniyor. On yil icinde her sey farkli olacak.\n"
-        "Dis Ses: Ve simdi kisa bir ara veriyoruz.\n"
-        "Sunucu: Tekrar hos geldiniz! Son sorumuz: Bize tavsiyeniz nedir?\n"
-        "Konuk: Merak edin, ogreyin ve adapte olun. Bu uclu yeterli.\n"
-        "Dis Ses: Bizi dinlediniz icin tesekkurler!"
+    "🏥 Medikal": (
+        "Elif: Merhaba ve 3 Soru 3 Dakika'ya hoş geldiniz. Ben Elif, bugün sağlık teknolojilerinin geleceğini konuşacağız.\n"
+        "Eba: Bugünün konuğu, dijital sağlık dönüşümünde öncü çalışmalar yürüten kıdemli bir uzman hekim.\n"
+        "Ecem: Merhaba Elif, bu platforma davet edildiğim için çok mutluyum.\n"
+        "Elif: İlk sorumuzla başlayalım. Yapay zeka gerçekten tanı koyabilir mi?\n"
+        "Ecem: Henüz tam anlamıyla değil. Ama destekleyici rolü inanılmaz güçlendi. Özellikle görüntü analizinde.\n"
+        "Eba: Araştırmalar, yapay zekanın bazı patoloji görüntülerinde uzman hekimlerle yarışabilir doğruluk sağladığını gösteriyor.\n"
+        "Elif: İkinci sorumuz: Hekimler bu teknolojiyi nasıl karşılıyor?\n"
+        "Ecem: İki kutup var. Bir kesim çok heyecanlı, diğer kesim temkinli. Ben temkinli heyecanlıların safındayım.\n"
+        "Elif: Son olarak, Türkiye bu dönüşüme hazır mı?\n"
+        "Ecem: Altyapı hızla gelişiyor. Ama en büyük açık insan kaynağında. Dijital okuryazarlık şart.\n"
+        "Eba: 3 Soru 3 Dakika'yı izlediğiniz için teşekkürler. Sağlıkla kalın."
     ),
-    "📰 Haber": (
-        "Dis Ses: 3 Soru 3 Dakika haber bultenine hos geldiniz.\n"
-        "Sunucu: Bugünün one cikan gelismelerini aktariyoruz.\n"
-        "Uzman: Teknoloji sektöründen carpici rakamlar aciklandi.\n"
-        "Sunucu: Bu gelismeler sektoru nasil etkiliyor?\n"
-        "Uzman: Donusum hizi beklentilerin cok üzerinde seyrediyor.\n"
-        "Raportör: Uzmanlar onumüzdeki doneme dikkatli yaklasılmasini oneriyor.\n"
-        "Dis Ses: Bultenimizin sonuna geldik. Yarin gorusmek uzere!"
+    "💼 İş Dünyası": (
+        "Elif: Hoş geldiniz. Bugün girişim ekosistemi ve startup kültürünü masaya yatırıyoruz.\n"
+        "Eba: Konuğumuz, son beş yılda üç başarılı exit gerçekleştirmiş deneyimli bir girişimci.\n"
+        "Ecem: Merhaba, bu konuşmayı çok önemsiyorum.\n"
+        "Elif: İlk soru: Türk startup ekosistemi global rekabete hazır mı?\n"
+        "Ecem: Potansiyel muazzam. Ama sabırsızlık en büyük düşmanımız. Hızlı büyümek yerine sağlam büyümek lazım.\n"
+        "Eba: Son verilere göre Türkiye, Orta Doğu ve Afrika'nın en aktif startup ekosistemlerinden biri konumunda.\n"
+        "Elif: İkinci soru: Yatırımcı bulmak artık daha mı zor?\n"
+        "Ecem: Akıllı para daha seçici. Bu aslında iyi. Gerçek değer yaratan şirketler için fırsatlar arttı.\n"
+        "Elif: Son soru: Yeni girişimcilere tek bir tavsiye?\n"
+        "Ecem: Problemi iyi tanımlayın. Çözümü değil, problemi sevin. Gerisi gelir.\n"
+        "Eba: Değerli bilgiler için teşekkürler. Bir sonraki bölümde görüşmek üzere."
     ),
-    "📚 Egitim": (
-        "Sunucu: Bilim dünyasina hos geldiniz!\n"
-        "Dis Ses: Bu bolumde kuantum fiziginin temellerini ele alacagiz.\n"
-        "Konuk: Kuantum fizigi, atom alti parcaciklarin davranisini inceler.\n"
-        "Sunucu: Bu bilgi gunluk hayatimiza nasil yansiyor?\n"
-        "Uzman: Akilli telefondan tibbi cihazlara kadar her yerde kuantum var.\n"
-        "Konuk: Superpozisyon ilkesi en ilginc kavram. Parcacik ayni anda iki yerde olabilir.\n"
-        "Anlatici: Bir sonraki bolumde kuantum dolanikligini inceleyecegiz. Takipte kalin!"
+    "🎓 Eğitim": (
+        "Elif: 3 Soru 3 Dakika'ya hoş geldiniz. Bugün eğitimin geleceğini tartışıyoruz.\n"
+        "Eba: Konuğumuz, eğitim teknolojileri alanında on yılı aşkın deneyime sahip bir akademisyen.\n"
+        "Ecem: Merhaba, eğitim hepimizin ortak meselesi, bu yüzden burada olmaktan mutluyum.\n"
+        "Elif: İlk sorum şu: Yapay zeka öğretmenlerin yerini alacak mı?\n"
+        "Ecem: Kesinlikle hayır. Ama öğretmenlik mesleğini köklü biçimde dönüştürecek. Rutin görevler azalacak, insan teması öne çıkacak.\n"
+        "Eba: Dünya Ekonomik Forumu verilerine göre 2030'a kadar eğitimde en değerli beceriler eleştirel düşünme ve yaratıcılık olacak.\n"
+        "Elif: İkinci soru: Uzaktan eğitim kalıcı mı oldu?\n"
+        "Ecem: Hibrit model kalıcı oldu. Saf uzaktan veya saf yüz yüze değil. En iyi ikisini birleştiren model kazanacak.\n"
+        "Elif: Son soru: Türk eğitim sistemi ne yapmalı?\n"
+        "Ecem: Ezber kültüründen soru sorma kültürüne geçmeli. Bu bir nesil işi ama başlamak için en iyi an şimdi.\n"
+        "Eba: Teşekkürler. Öğrenmeye devam edin, görüşmek üzere."
     ),
 }
 
-VIDEO_W, VIDEO_H = 1280, 720
-VIDEO_FPS = 30
+VIDEO_W, VIDEO_H, VIDEO_FPS = 1280, 720, 30
 
-
-# ─────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
 # 2. YARDIMCI
-# ─────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
 
 def hex_to_rgb(h: str) -> tuple:
     h = h.lstrip("#")
     return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
-
 
 def wrap_text(text: str, max_chars: int) -> list[str]:
     words, lines, line = text.split(), [], ""
@@ -140,17 +115,20 @@ def wrap_text(text: str, max_chars: int) -> list[str]:
         if len(test) <= max_chars:
             line = test
         else:
-            if line:
-                lines.append(line)
+            if line: lines.append(line)
             line = w
-    if line:
-        lines.append(line)
+    if line: lines.append(line)
     return lines
 
+def mp3_duration(data: bytes) -> float:
+    return max(1.5, len(data) / 16_000) if data else 3.0
 
-# ─────────────────────────────────────────────────────────
+def audio_to_b64(data: bytes) -> str:
+    return base64.b64encode(data).decode()
+
+# ══════════════════════════════════════════════════════════════
 # 3. SCRIPT PARSER
-# ─────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
 
 class ScriptParser:
     def __init__(self):
@@ -161,10 +139,12 @@ class ScriptParser:
         if name in CHARACTERS:
             return CHARACTERS[name]
         if name not in self._dyn:
-            hex_c, bg, dark = FALLBACK_COLORS[self._ci % len(FALLBACK_COLORS)]
+            hex_c, bg, dark = FALLBACK[self._ci % len(FALLBACK)]
             self._dyn[name] = {
                 "color": hex_c, "bg_rgb": bg, "dark_rgb": dark,
-                "emoji": "🔊", "animation": "pulse", "svg_accent": "#fff",
+                "emoji": "🔊", "role": "Konuşmacı",
+                "animation": "pulse",
+                "avatar_bg": f"linear-gradient(135deg,{hex_c},{hex_c}88)",
             }
             self._ci += 1
         return self._dyn[name]
@@ -197,191 +177,58 @@ class ScriptParser:
         return {"character": char, "text": text, "info": self._info(char)}
 
     @staticmethod
-    def word_count(s: str) -> int:
-        return len(s.split())
+    def word_count(s): return len(s.split())
 
     @staticmethod
-    def duration_str(wc: int) -> str:
+    def duration_str(wc):
         m, s = divmod(int(wc / 130 * 60), 60)
         return f"{m}:{s:02d}"
 
 
-# ─────────────────────────────────────────────────────────
-# 4. TTS MOTORLARI
-# ─────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# 4. SES YÖNETİMİ — Kendi MP3 sesinizi yükleyin
+# ══════════════════════════════════════════════════════════════
 
-# Edge TTS Türkçe sesleri (Microsoft, ücretsiz)
-EDGE_VOICES = {
-    "Elif (Kadın)":  "tr-TR-EminNeural",
-    "Eba (Erkek)":  "tr-TR-EbaNeural",
-}
+class VoiceManager:
+    """
+    Kullanıcının yüklediği MP3 dosyalarını yönetir.
+    Her karakter için ayrı ses atanabilir veya tek ses tüm karakterlere verilebilir.
+    """
 
-# Her karakter için Edge TTS ses ataması
-EDGE_CHARACTER_VOICES = {
-    "Sunucu":    "tr-TR-EbaNeural",
-    "Konuk":     "tr-TR-EminNeural",
-    "Dis Ses":   "tr-TR-EbaNeural",
-    "Uzman":     "tr-TR-EbaNeural",
-    "Raportör":  "tr-TR-EminNeural",
-    "Anlatici":  "tr-TR-EminNeural",
-}
+    def __init__(self, voice_map: dict[str, bytes]):
+        """voice_map: {karakter_adı: mp3_bytes}"""
+        self.voice_map = voice_map  # {"Elif": b"...", "Ecem": b"...", ...}
+        self.default   = next(iter(voice_map.values())) if voice_map else None
 
+    def get_audio(self, character: str) -> Optional[bytes]:
+        """Karakter için en uygun sesi döner."""
+        return self.voice_map.get(character) or self.default
 
-def mp3_duration(data: bytes) -> float:
-    return max(1.5, len(data) / 16_000) if data else 3.0
+    def has_voice(self, character: str) -> bool:
+        return character in self.voice_map or self.default is not None
 
 
-class EdgeTTS:
-    """Microsoft Edge TTS — ücretsiz, API key gerektirmez, Türkçe mükemmel."""
-
-    @staticmethod
-    def available() -> bool:
-        try:
-            import edge_tts  # noqa
-            return True
-        except ImportError:
-            return False
-
-    @staticmethod
-    def synthesize(text: str, voice: str) -> Optional[bytes]:
-        """
-        Streamlit zaten bir async event loop çalıştırır.
-        Bu yüzden edge_tts'i ayrı bir thread'de, kendi loop'uyla çalıştırıyoruz.
-        """
-        try:
-            import edge_tts
-            import asyncio
-            import concurrent.futures
-
-            async def _run():
-                communicate = edge_tts.Communicate(text, voice)
-                buf = io.BytesIO()
-                async for chunk in communicate.stream():
-                    if chunk["type"] == "audio":
-                        buf.write(chunk["data"])
-                return buf.getvalue()
-
-            def _run_in_thread():
-                # Her thread kendi event loop'una sahip
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    return loop.run_until_complete(_run())
-                finally:
-                    loop.close()
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(_run_in_thread)
-                return future.result(timeout=60)
-
-        except Exception as e:
-            st.warning(f"Edge TTS hatası: {e}")
-            return None
+def combine_segments(segments_audio: list[bytes], silence_ms: int = 300) -> bytes:
+    """
+    Ses segmentlerini birleştirir.
+    pydub olmadan: MP3 byte'larını doğrudan birleştirir.
+    (Çoğu player bunu sorunsuz oynatır.)
+    """
+    silence = b"\xff\xfb\x90\x00" * (silence_ms * 44)  # ~sessizlik
+    combined = b""
+    for i, audio in enumerate(segments_audio):
+        if audio:
+            combined += audio
+            if i < len(segments_audio) - 1:
+                combined += silence
+    return combined
 
 
-class GTTS:
-    """Google TTS — ücretsiz, basit, Türkçe destekler."""
-
-    @staticmethod
-    def available() -> bool:
-        try:
-            from gtts import gTTS  # noqa
-            return True
-        except ImportError:
-            return False
-
-    @staticmethod
-    def synthesize(text: str) -> Optional[bytes]:
-        try:
-            from gtts import gTTS
-            buf = io.BytesIO()
-            tts = gTTS(text=text, lang="tr", slow=False)
-            tts.write_to_fp(buf)
-            buf.seek(0)
-            return buf.read()
-        except Exception as e:
-            st.warning(f"gTTS hatası: {e}")
-            return None
-
-
-class OpenAITTS:
-    """OpenAI TTS — ücretli ama çok kaliteli."""
-
-    def __init__(self, key: str):
-        self.key = key.strip()
-
-    def available(self) -> bool:
-        return bool(self.key)
-
-    def synthesize(self, text: str, voice: str = "onyx") -> Optional[bytes]:
-        try:
-            r = requests.post(
-                "https://api.openai.com/v1/audio/speech",
-                headers={"Authorization": f"Bearer {self.key}",
-                         "Content-Type": "application/json"},
-                json={"model": "tts-1", "input": text, "voice": voice},
-                timeout=60,
-            )
-            return r.content if r.status_code == 200 else None
-        except Exception as e:
-            st.warning(f"OpenAI TTS hatası: {e}")
-            return None
-
-
-class ElevenLabsAPI:
-    """ElevenLabs — klon ses için, opsiyonel."""
-    BASE = "https://api.elevenlabs.io/v1"
-
-    def __init__(self, key: str):
-        self.key = key.strip()
-        self.h = {
-            "xi-api-key": self.key,
-            **({"Authorization": f"Bearer {self.key}"} if self.key.startswith("sk_") else {}),
-        }
-
-    def check(self) -> tuple[bool, str]:
-        try:
-            r = requests.get(f"{self.BASE}/voices", headers=self.h, timeout=10)
-            if r.status_code == 200:
-                voices = r.json().get("voices", [])
-                return True, f"{len(voices)} ses bulundu"
-            try:
-                detail = r.json().get("detail", {})
-                msg = detail.get("message", r.text[:100]) if isinstance(detail, dict) else str(detail)[:100]
-            except Exception:
-                msg = r.text[:100]
-            return False, f"Hata {r.status_code}: {msg}"
-        except Exception as e:
-            return False, str(e)[:100]
-
-    def list_voices(self) -> list[dict]:
-        try:
-            r = requests.get(f"{self.BASE}/voices", headers=self.h, timeout=10)
-            return r.json().get("voices", []) if r.status_code == 200 else []
-        except:
-            return []
-
-    def tts(self, text: str, voice_id: str, stab: float = 0.5, sim: float = 0.75) -> Optional[bytes]:
-        try:
-            r = requests.post(
-                f"{self.BASE}/text-to-speech/{voice_id}",
-                headers={**self.h, "Content-Type": "application/json"},
-                json={"text": text, "model_id": "eleven_multilingual_v2",
-                      "voice_settings": {"stability": stab, "similarity_boost": sim}},
-                timeout=60,
-            )
-            return r.content if r.status_code == 200 else None
-        except:
-            return None
-
-
-# ─────────────────────────────────────────────────────────
-# 5. FRAME RENDERER (Pillow)
-# ─────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# 5. FRAME RENDERER (Pillow) — Broadcast TV estetiği
+# ══════════════════════════════════════════════════════════════
 
 class FrameRenderer:
-    """Her video karesi için PIL Image üretir."""
-
     FONT_PATHS = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
@@ -390,407 +237,376 @@ class FrameRenderer:
     ]
 
     def __init__(self):
-        from PIL import Image, ImageDraw, ImageFont, ImageFilter
+        from PIL import Image, ImageDraw, ImageFont
         self.Image = Image
         self.Draw  = ImageDraw.Draw
         self.Font  = ImageFont
-        self.Filter = ImageFilter
-        self._font_cache: dict = {}
+        self._fc   = {}
 
     def _font(self, size: int):
-        if size in self._font_cache:
-            return self._font_cache[size]
+        if size in self._fc:
+            return self._fc[size]
         for p in self.FONT_PATHS:
             if os.path.exists(p):
                 try:
                     f = self.Font.truetype(p, size)
-                    self._font_cache[size] = f
+                    self._fc[size] = f
                     return f
-                except:
-                    pass
+                except: pass
         f = self.Font.load_default()
-        self._font_cache[size] = f
+        self._fc[size] = f
         return f
 
     def render(self, seg: dict, t: float) -> "Image":
-        """t ∈ [0,1]: animation progress within this segment."""
-        w, h = VIDEO_W, VIDEO_H
+        w, h  = VIDEO_W, VIDEO_H
         info  = seg["info"]
+        color = hex_to_rgb(info["color"])
         bg    = info["bg_rgb"]
         dark  = info["dark_rgb"]
-        color = hex_to_rgb(info["color"])
 
-        # --- gradient background ---
         img  = self.Image.new("RGB", (w, h))
         draw = self.Draw(img)
+
+        # ── Gradient arka plan ──────────────────────────
         for y in range(h):
             r_t = y / h
-            r = int(dark[0] + (bg[0] - dark[0]) * r_t)
-            g = int(dark[1] + (bg[1] - dark[1]) * r_t)
-            b = int(dark[2] + (bg[2] - dark[2]) * r_t)
-            draw.line([(0, y), (w, y)], fill=(r, g, b))
+            r = int(dark[0] + (bg[0]-dark[0]) * r_t)
+            g = int(dark[1] + (bg[1]-dark[1]) * r_t)
+            b = int(dark[2] + (bg[2]-dark[2]) * r_t)
+            draw.line([(0,y),(w,y)], fill=(r,g,b))
 
-        # subtle dot grid overlay
-        for gy in range(0, h, 40):
-            for gx in range(0, w, 40):
-                draw.ellipse([gx-1, gy-1, gx+1, gy+1], fill=(*color, 18))
+        # ── Grid desen (broadcast look) ─────────────────
+        for gx in range(0, w, 60):
+            draw.line([(gx,0),(gx,h)], fill=(*color,8))
+        for gy in range(0, h, 60):
+            draw.line([(0,gy),(w,gy)], fill=(*color,8))
 
-        # --- animated orb ---
-        anim   = info.get("animation", "pulse")
-        cx, cy = w // 2, h // 2 - 100
-        orb_r  = 108
+        # ── Üst bar (show branding) ─────────────────────
+        draw.rectangle([0, 0, w, 64], fill=(8, 8, 18, 230))
+        draw.rectangle([0, 60, w, 64], fill=color)
+        fn22 = self._font(22)
+        fn18 = self._font(18)
+        fn26 = self._font(26)
+        fn32 = self._font(32)
+        fn14 = self._font(14)
+        draw.text((32, 18), "3 SORU 3 DAKİKA", font=fn22,
+                  fill=(*color, 230), anchor="lm")
+        draw.text((w-32, 18), "● CANLI", font=fn14,
+                  fill=(255, 80, 80, int(200 + 55*math.sin(t*math.pi*4))),
+                  anchor="rm")
+
+        # ── Animasyonlu avatar orb ──────────────────────
+        anim  = info.get("animation", "pulse")
+        cx, cy = w // 2, h // 2 - 65
+        orb_r  = 105
 
         if anim == "bounce":
-            cy   += int(16 * math.sin(t * math.pi * 3))
+            cy   += int(14 * math.sin(t * math.pi * 3))
         elif anim == "pulse":
-            orb_r = int(108 + 12 * math.sin(t * math.pi * 3))
+            orb_r = int(105 + 11 * math.sin(t * math.pi * 3))
         elif anim == "float":
-            cx   += int(14 * math.sin(t * math.pi * 2))
-            cy   += int(10 * math.cos(t * math.pi * 2))
+            cx   += int(12 * math.sin(t * math.pi * 2))
+            cy   += int(9  * math.cos(t * math.pi * 2))
         elif anim == "shake":
-            cx   += int(8 * math.sin(t * math.pi * 6))
+            cx   += int(7  * math.sin(t * math.pi * 6))
 
-        # glow rings
+        # Glow halkaları
         for gi in range(5, 0, -1):
-            gr = orb_r + gi * 16
-            ga = max(0, 22 - gi * 4)
+            gr = orb_r + gi * 18
+            ga = max(0, 18 - gi * 3)
             draw.ellipse([cx-gr, cy-gr, cx+gr, cy+gr], fill=(*color, ga))
 
-        # main orb
-        draw.ellipse([cx-orb_r, cy-orb_r, cx+orb_r, cy+orb_r], fill=(*color, 230))
+        # Ana orb
+        draw.ellipse([cx-orb_r, cy-orb_r, cx+orb_r, cy+orb_r],
+                     fill=(*color, 220))
+        # İç highlight
+        hr = orb_r // 3
+        draw.ellipse([cx-hr, cy-orb_r+14, cx+hr//2, cy-orb_r//2+14],
+                     fill=(255, 255, 255, 50))
 
-        # inner highlight
-        hi_r = orb_r // 3
-        draw.ellipse([cx-hi_r, cy-orb_r+12, cx+hi_r//2, cy-orb_r//2+12],
-                     fill=(255, 255, 255, 55))
+        # Emoji
+        draw.text((cx, cy), info["emoji"], font=self._font(62),
+                  fill=(255, 255, 255, 220), anchor="mm")
 
-        # --- character name ---
-        fn36 = self._font(36)
-        fn28 = self._font(28)
-        fn24 = self._font(24)
+        # ── İsim ve rol ─────────────────────────────────
+        draw.text((cx, cy + orb_r + 28), seg["character"],
+                  font=fn32, fill=(255, 255, 255, 230), anchor="mm")
+        draw.text((cx, cy + orb_r + 62), info.get("role", ""),
+                  font=fn18, fill=(*color, 180), anchor="mm")
 
-        draw.text((cx, cy + orb_r + 32), seg["character"],
-                  font=fn36, fill=(255, 255, 255, 230), anchor="mm")
+        # ── Ses dalgası barları ─────────────────────────
+        wy = h - 230
+        for bi in range(11):
+            bh_val = int(10 + 28 * abs(math.sin(t*math.pi*2.5 + bi*0.5)))
+            bx = w//2 - 90 + bi * 18
+            draw.rounded_rectangle([bx, wy-bh_val, bx+10, wy],
+                                   radius=4, fill=(*color, 185))
 
-        # --- speech bubble ---
-        bub_margin = 80
-        bub_y      = h - 220
-        bub_h      = 175
-        bub_x2     = w - bub_margin
-        bub_y2     = bub_y + bub_h
+        # ── Konuşma balonu ──────────────────────────────
+        bub_m  = 70
+        bub_y  = h - 210
+        bub_h  = 170
+        bub_x2 = w - bub_m
+        bub_y2 = bub_y + bub_h
 
-        # shadow
-        draw.rounded_rectangle(
-            [bub_margin+5, bub_y+5, bub_x2+5, bub_y2+5],
-            radius=24, fill=(0, 0, 0, 80),
-        )
-        # bubble
-        draw.rounded_rectangle(
-            [bub_margin, bub_y, bub_x2, bub_y2],
-            radius=24, fill=(245, 245, 255, 215),
-            outline=(*color, 200), width=3,
-        )
-        # bubble tip
-        tip_cx = cx
-        draw.polygon(
-            [(tip_cx-14, bub_y), (tip_cx+14, bub_y), (tip_cx, bub_y-18)],
-            fill=(245, 245, 255, 215),
-        )
+        # Gölge
+        draw.rounded_rectangle([bub_m+4, bub_y+4, bub_x2+4, bub_y2+4],
+                                radius=20, fill=(0,0,0,70))
+        # Balon
+        draw.rounded_rectangle([bub_m, bub_y, bub_x2, bub_y2],
+                                radius=20, fill=(245,245,255,210),
+                                outline=(*color,190), width=3)
+        # Balon oku
+        draw.polygon([(cx-16, bub_y),(cx+16, bub_y),(cx, bub_y-20)],
+                     fill=(245,245,255,210))
 
-        # typewriter text reveal
-        full_text  = seg["text"]
-        reveal_fac = min(1.0, t * 2.2 + 0.03)
-        partial    = full_text[: int(len(full_text) * reveal_fac)]
-        bub_w_px   = (w - bub_margin * 2) - 60
-        char_per_line = max(20, bub_w_px // 14)
-        lines = wrap_text(partial, char_per_line)
+        # Typewriter metni
+        full    = seg["text"]
+        rev     = int(len(full) * min(1.0, t*2.4 + 0.02))
+        partial = full[:rev]
+        cpline  = max(22, (w - bub_m*2 - 60) // 13)
+        lines   = wrap_text(partial, cpline)
 
-        ty = bub_y + 26
-        for line in lines[:4]:
-            draw.text((w // 2, ty), line, font=fn24,
-                      fill=(25, 20, 45, 245), anchor="mm")
-            ty += 34
+        ty = bub_y + 24
+        for ln in lines[:4]:
+            draw.text((w//2, ty), ln, font=fn22,
+                      fill=(20,18,40,245), anchor="mm")
+            ty += 36
 
-        # --- sound wave bars ---
-        wy = bub_y - 52
-        for bi in range(9):
-            bar_h = int(13 + 26 * abs(math.sin(t * math.pi * 2.5 + bi * 0.55)))
-            bx    = w // 2 - 72 + bi * 18
-            draw.rounded_rectangle(
-                [bx, wy - bar_h, bx + 10, wy],
-                radius=4, fill=(*color, 190),
-            )
+        # ── Alt info bar ────────────────────────────────
+        draw.rectangle([0, h-48, w, h], fill=(8,8,18,220))
+        draw.rectangle([0, h-48, w, h-45], fill=color)
 
-        # --- slide-in overlay (fade from black at start) ---
-        if t < 0.12:
-            alpha = int(255 * (1 - t / 0.12))
-            overlay = self.Image.new("RGB", (w, h), (0, 0, 0))
-            img = self.Image.blend(img, overlay, alpha / 255)
-            draw = self.Draw(img)
+        char_n  = seg["character"]
+        role_n  = info.get("role","")
+        draw.text((32, h-24), f"{char_n}  ·  {role_n}",
+                  font=fn18, fill=(255,255,255,200), anchor="lm")
 
-        # --- progress bar ---
-        draw = self.Draw(img)
-        draw.rectangle([0, h - 8, int(w * t), h], fill=color)
-        draw.rectangle([0, h - 8, w, h - 7], fill=(255, 255, 255, 20))
+        # Zaman damgası
+        import datetime
+        ts = datetime.datetime.now().strftime("%H:%M")
+        draw.text((w-32, h-24), ts, font=fn14,
+                  fill=(*color,180), anchor="rm")
 
-        return img
+        # ── Progress bar ────────────────────────────────
+        pw = int(w * t)
+        draw.rectangle([0, h-6, pw, h], fill=color)
+
+        return img.convert("RGB")
 
 
-# ─────────────────────────────────────────────────────────
-# 6. VIDEO MAKER (imageio + imageio-ffmpeg, saf Python)
-# ─────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# 6. VIDEO MAKER (imageio)
+# ══════════════════════════════════════════════════════════════
 
 class VideoMaker:
     def __init__(self):
-        self.has_imageio = False
         self.has_pil     = False
+        self.has_imageio = False
         try:
-            import imageio
-            import imageio.v3 as iio
-            self._imageio = imageio
-            self._iio     = iio
-            self.has_imageio = True
-        except ImportError:
-            pass
+            from PIL import Image; self.has_pil = True
+        except ImportError: pass
         try:
-            from PIL import Image
-            self.has_pil = True
-        except ImportError:
-            pass
+            import imageio; import imageio.v3; self.has_imageio = True
+        except ImportError: pass
 
-    def ready(self) -> bool:
-        return self.has_imageio and self.has_pil
+    def ready(self): return self.has_pil and self.has_imageio
 
-    def make(
-        self,
-        audio_segs: list[dict],
-        progress_cb=None,
-    ) -> Optional[bytes]:
-        """Ses segmentlerini video kareleriyle birleştirir. bytes döner."""
+    def make(self, audio_segs: list[dict], cb=None) -> Optional[bytes]:
         import imageio.v3 as iio
         import numpy as np
+        import subprocess, imageio_ffmpeg
 
-        fps      = VIDEO_FPS
-        renderer = FrameRenderer()
+        renderer  = FrameRenderer()
         all_audio = b""
         frames    = []
-
-        total_frames = sum(
-            max(fps, int(s.get("duration", 3.0) * fps)) for s in audio_segs
-        )
+        total_f   = sum(max(VIDEO_FPS, int(s.get("duration",3)*VIDEO_FPS))
+                        for s in audio_segs)
         done = 0
 
         for seg in audio_segs:
-            dur    = seg.get("duration", 3.0)
-            n      = max(fps, int(dur * fps))
-            audio  = seg.get("audio") or b""
+            dur   = seg.get("duration", 3.0)
+            n     = max(VIDEO_FPS, int(dur * VIDEO_FPS))
+            audio = seg.get("audio") or b""
             all_audio += audio
-
             for fi in range(n):
-                t   = fi / max(n - 1, 1)
-                img = renderer.render(seg, t)
-                frames.append(np.array(img))
+                frames.append(np.array(renderer.render(seg, fi/max(n-1,1))))
                 done += 1
-                if progress_cb and done % 15 == 0:
-                    progress_cb(done / total_frames * 0.80, f"Kare {done}/{total_frames}")
+                if cb and done % 20 == 0:
+                    cb(done/total_f*0.78, f"Kare {done}/{total_f}")
 
-        if progress_cb:
-            progress_cb(0.82, "Video kodlanıyor...")
+        if cb: cb(0.80, "Video kodlanıyor…")
 
-        # Write video to temp file, then audio-mux via imageio ffmpeg plugin
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as vtmp:
-            vpath = vtmp.name
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as atmp:
-            apath = atmp.name
-            atmp.write(all_audio)
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as vf:
+            vpath = vf.name
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as af:
+            apath = af.name
+            af.write(all_audio)
 
-        # Write silent video
-        iio.imwrite(
-            vpath,
-            frames,
-            fps=fps,
-            codec="libx264",
-            output_params=["-crf", "23", "-preset", "fast", "-pix_fmt", "yuv420p"],
-            plugin="FFMPEG",
-        )
+        iio.imwrite(vpath, frames, fps=VIDEO_FPS, codec="libx264",
+                    output_params=["-crf","22","-preset","fast",
+                                   "-pix_fmt","yuv420p"], plugin="FFMPEG")
 
-        if progress_cb:
-            progress_cb(0.91, "Ses ekleniyor...")
+        if cb: cb(0.90, "Ses ekleniyor…")
 
-        # Mux audio into video using imageio-ffmpeg
-        out_path = vpath.replace(".mp4", "_final.mp4")
-        import imageio_ffmpeg
-        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-
-        import subprocess
-        cmd = [
-            ffmpeg_exe, "-y",
-            "-i", vpath,
-            "-i", apath,
-            "-c:v", "copy",
-            "-c:a", "aac", "-b:a", "128k",
-            "-shortest",
-            out_path,
-        ]
+        out = vpath.replace(".mp4","_out.mp4")
+        cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-y",
+               "-i", vpath, "-i", apath,
+               "-c:v","copy","-c:a","aac","-b:a","128k",
+               "-shortest", out]
         subprocess.run(cmd, capture_output=True)
+        os.unlink(vpath); os.unlink(apath)
 
-        # Cleanup
-        os.unlink(vpath)
-        os.unlink(apath)
-
-        if progress_cb:
-            progress_cb(1.0, "Tamamlandı!")
-
-        if os.path.exists(out_path):
-            with open(out_path, "rb") as f:
-                data = f.read()
-            os.unlink(out_path)
+        if cb: cb(1.0, "Tamamlandı!")
+        if os.path.exists(out):
+            data = open(out,"rb").read()
+            os.unlink(out)
             return data
         return None
 
 
-# ─────────────────────────────────────────────────────────
-# 7. PDF MAKER (reportlab)
-# ─────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# 7. PDF MAKER (reportlab) — Broadcast TV tasarımı
+# ══════════════════════════════════════════════════════════════
 
 class PDFMaker:
     def __init__(self):
         self.ready = False
         try:
-            from reportlab.pdfgen import canvas as rlcanvas
+            from reportlab.pdfgen import canvas as rlc
             from reportlab.lib.pagesizes import landscape, A4
-            from reportlab.lib.colors import HexColor, white, Color
-            from reportlab.lib.units import mm
-            self._canvas  = rlcanvas
-            self._A4L     = landscape(A4)
-            self._Hex     = HexColor
-            self._white   = white
-            self._Color   = Color
-            self._mm      = mm
-            self.ready    = True
-        except ImportError:
-            pass
+            self._canvas = rlc
+            self._A4L    = landscape(A4)
+            self.ready   = True
+        except ImportError: pass
 
     def make(self, segments: list[dict]) -> Optional[bytes]:
-        if not self.ready:
-            return None
-
+        if not self.ready: return None
         buf = io.BytesIO()
-        W, H = self._A4L          # 842 x 595 pt (landscape A4)
+        W, H = self._A4L
         c = self._canvas.Canvas(buf, pagesize=self._A4L)
 
         for idx, seg in enumerate(segments):
             info  = seg["info"]
-            color = info["color"]
+            color = hex_to_rgb(info["color"])
             bg    = info["bg_rgb"]
             dark  = info["dark_rgb"]
-            hex_c = self._Hex(color)
+            hex_c = info["color"]
 
-            # gradient background (vertical strips approximation)
-            steps = 40
+            # Gradient bg
+            steps = 50
             for i in range(steps):
-                t   = i / steps
-                r_  = int(dark[0] + (bg[0] - dark[0]) * t)
-                g_  = int(dark[1] + (bg[1] - dark[1]) * t)
-                b_  = int(dark[2] + (bg[2] - dark[2]) * t)
+                t = i / steps
+                r_ = int(dark[0]+(bg[0]-dark[0])*t)
+                g_ = int(dark[1]+(bg[1]-dark[1])*t)
+                b_ = int(dark[2]+(bg[2]-dark[2])*t)
                 c.setFillColorRGB(r_/255, g_/255, b_/255)
-                strip_h = H / steps
-                c.rect(0, H - strip_h * (i+1), W, strip_h, fill=1, stroke=0)
+                c.rect(0, H-H/steps*(i+1), W, H/steps+1, fill=1, stroke=0)
 
-            # decorative dots
-            dot_color = [x/255 for x in hex_to_rgb(color)]
-            for dx in range(0, int(W), 50):
-                for dy in range(0, int(H), 50):
-                    c.setFillColorRGB(*dot_color)
-                    c.setFillAlpha(0.08)
-                    c.circle(dx, dy, 2, fill=1, stroke=0)
-            c.setFillAlpha(1)
+            # Üst bar
+            c.setFillColorRGB(0.03, 0.03, 0.07)
+            c.rect(0, H-50, W, 50, fill=1, stroke=0)
+            c.setFillColorRGB(*[x/255 for x in color])
+            c.rect(0, H-54, W, 4, fill=1, stroke=0)
+            c.setFont("Helvetica-Bold", 16)
+            c.setFillColorRGB(*[x/255 for x in color])
+            c.drawString(24, H-34, "3 SORU 3 DAKİKA")
+            c.setFont("Helvetica", 10)
+            c.setFillColorRGB(1, 0.3, 0.3)
+            c.drawRightString(W-24, H-34, "● YAYIN")
 
-            # orb
-            orb_x, orb_y, orb_r = W * 0.5, H * 0.62, 70
-            for ring in range(4, 0, -1):
-                rr = orb_r + ring * 14
-                c.setFillColorRGB(*[x/255 for x in hex_to_rgb(color)])
-                c.setFillAlpha(0.06 - ring * 0.01)
+            # Grid çizgileri (hafif)
+            c.setStrokeColorRGB(*[x/255 for x in color])
+            c.setLineWidth(0.3)
+            for gx in range(0, int(W), 55):
+                c.setStrokeAlpha(0.07)
+                c.line(gx, 0, gx, H-54)
+            c.setStrokeAlpha(1)
+
+            # Orb (daire)
+            orb_x, orb_y, orb_r = W*0.5, H*0.58, 65
+            for ring in range(4,0,-1):
+                rr = orb_r + ring*14
+                c.setFillColorRGB(*[x/255 for x in color])
+                c.setFillAlpha(max(0.02, 0.07-ring*0.015))
                 c.circle(orb_x, orb_y, rr, fill=1, stroke=0)
-            c.setFillColorRGB(*[x/255 for x in hex_to_rgb(color)])
+            c.setFillColorRGB(*[x/255 for x in color])
             c.setFillAlpha(0.88)
             c.circle(orb_x, orb_y, orb_r, fill=1, stroke=0)
-            # highlight
-            c.setFillColorRGB(1, 1, 1)
-            c.setFillAlpha(0.22)
-            c.circle(orb_x - orb_r * 0.28, orb_y + orb_r * 0.35, orb_r * 0.28, fill=1, stroke=0)
+            c.setFillColorRGB(1,1,1); c.setFillAlpha(0.18)
+            c.circle(orb_x-orb_r*0.28, orb_y+orb_r*0.32, orb_r*0.26, fill=1, stroke=0)
 
-            # emoji (as text, best effort)
-            c.setFillAlpha(1)
-            c.setFillColorRGB(1, 1, 1)
-            c.setFont("Helvetica-Bold", 46)
-            c.drawCentredString(orb_x, orb_y - 16, info.get("emoji", ""))
+            # Emoji
+            c.setFillColorRGB(1,1,1); c.setFillAlpha(1)
+            c.setFont("Helvetica-Bold", 36)
+            c.drawCentredString(orb_x, orb_y-12, info.get("emoji",""))
 
-            # character name
-            c.setFillColorRGB(1, 1, 1)
-            c.setFillAlpha(1)
-            c.setFont("Helvetica-Bold", 26)
-            c.drawCentredString(orb_x, orb_y - orb_r - 28, seg["character"])
+            # İsim + Rol
+            c.setFont("Helvetica-Bold", 22)
+            c.setFillColorRGB(1,1,1)
+            c.drawCentredString(orb_x, orb_y-orb_r-26, seg["character"])
+            c.setFont("Helvetica", 13)
+            c.setFillColorRGB(*[x/255 for x in color])
+            c.drawCentredString(orb_x, orb_y-orb_r-46, info.get("role",""))
 
-            # speech bubble
-            bub_margin = 50
-            bub_w_pt   = W - bub_margin * 2
-            bub_h_pt   = 140
-            bub_y_pt   = 30
-            bub_x_pt   = bub_margin
+            # Ses dalgası barları
+            bar_y = orb_y - orb_r - 65
+            for bi in range(9):
+                bh = 8 + (bi%3+1)*5
+                bx = orb_x - 68 + bi*17
+                c.setFillColorRGB(*[x/255 for x in color])
+                c.setFillAlpha(0.7)
+                c.roundRect(bx, bar_y-bh, 10, bh, 3, fill=1, stroke=0)
 
-            c.setFillColorRGB(0.95, 0.95, 1)
-            c.setFillAlpha(0.92)
-            c.roundRect(bub_x_pt, bub_y_pt, bub_w_pt, bub_h_pt, 16, fill=1, stroke=0)
-            # border
-            c.setStrokeColorRGB(*[x/255 for x in hex_to_rgb(color)])
-            c.setLineWidth(2.5)
-            c.setStrokeAlpha(0.75)
-            c.roundRect(bub_x_pt, bub_y_pt, bub_w_pt, bub_h_pt, 16, fill=0, stroke=1)
+            # Konuşma balonu
+            bub_m  = 45
+            bub_h_pt = 130
+            bub_y_pt = 38
+            bub_w_pt = W - bub_m*2
 
-            # text in bubble
-            c.setFillAlpha(1)
-            c.setFillColorRGB(0.1, 0.08, 0.18)
-            text    = seg["text"]
-            lines   = wrap_text(text, 72)
-            font_sz = 18 if len(lines) <= 3 else 15
-            c.setFont("Helvetica", font_sz)
-            line_h  = font_sz * 1.45
-            start_y = bub_y_pt + bub_h_pt - 28
-            for line in lines[:5]:
-                c.drawCentredString(W / 2, start_y, line)
-                start_y -= line_h
+            c.setFillColorRGB(0.96,0.96,1); c.setFillAlpha(0.93)
+            c.roundRect(bub_m, bub_y_pt, bub_w_pt, bub_h_pt, 14, fill=1, stroke=0)
+            c.setStrokeColorRGB(*[x/255 for x in color])
+            c.setStrokeAlpha(0.7); c.setLineWidth(2)
+            c.roundRect(bub_m, bub_y_pt, bub_w_pt, bub_h_pt, 14, fill=0, stroke=1)
 
-            # bubble tip (triangle) — reportlab path objesi ile
-            c.setFillColorRGB(0.95, 0.95, 1)
-            c.setFillAlpha(0.92)
-            tip_x = W / 2
-            tip_y_base = bub_y_pt + bub_h_pt
-            from reportlab.graphics.shapes import Polygon
-            from reportlab.lib.colors import Color as RLColor
-            tip_color = RLColor(0.95, 0.95, 1, 0.92)
+            # Balon ok (path ile)
+            tip_x  = W/2
+            tip_yb = bub_y_pt + bub_h_pt
+            c.setFillColorRGB(0.96,0.96,1); c.setFillAlpha(0.93)
             p = c.beginPath()
-            p.moveTo(tip_x - 14, tip_y_base)
-            p.lineTo(tip_x + 14, tip_y_base)
-            p.lineTo(tip_x,      tip_y_base + 18)
+            p.moveTo(tip_x-14, tip_yb)
+            p.lineTo(tip_x+14, tip_yb)
+            p.lineTo(tip_x,    tip_yb+16)
             p.close()
             c.drawPath(p, fill=1, stroke=0)
 
-            # slide number
-            c.setFillAlpha(0.45)
-            c.setFillColorRGB(1, 1, 1)
-            c.setFont("Helvetica", 11)
-            c.drawRightString(W - 18, 10, f"{idx+1} / {len(segments)}")
+            # Metin
+            c.setFillAlpha(1); c.setFillColorRGB(0.1,0.08,0.18)
+            text  = seg["text"]
+            lines = wrap_text(text, 75)
+            fsz   = 16 if len(lines) <= 3 else 13
+            c.setFont("Helvetica", fsz)
+            lh    = fsz * 1.5
+            ty    = bub_y_pt + bub_h_pt - 22
+            for ln in lines[:5]:
+                c.drawCentredString(W/2, ty, ln)
+                ty -= lh
 
-            # progress bar
-            c.setFillColorRGB(*[x/255 for x in hex_to_rgb(color)])
-            c.setFillAlpha(0.9)
-            prog_w = W * (idx + 1) / len(segments)
-            c.rect(0, 0, prog_w, 5, fill=1, stroke=0)
-            c.setFillColorRGB(1, 1, 1)
-            c.setFillAlpha(0.08)
-            c.rect(0, 0, W, 5, fill=1, stroke=0)
+            # Alt bar
+            c.setFillColorRGB(0.03,0.03,0.07); c.setFillAlpha(1)
+            c.rect(0, 0, W, 38, fill=1, stroke=0)
+            c.setFillColorRGB(*[x/255 for x in color])
+            c.rect(0, 36, W, 2, fill=1, stroke=0)
+            c.setFont("Helvetica-Bold", 12)
+            c.setFillColorRGB(*[x/255 for x in color])
+            c.drawString(24, 14, f"{seg['character']}  ·  {info.get('role','')}")
+            c.setFillColorRGB(1,1,1)
+            c.drawRightString(W-24, 14, f"{idx+1} / {len(segments)}")
+
+            # Progress bar
+            c.setFillColorRGB(*[x/255 for x in color]); c.setFillAlpha(0.9)
+            c.rect(0, 0, W*(idx+1)/len(segments), 5, fill=1, stroke=0)
 
             c.showPage()
 
@@ -799,69 +615,114 @@ class PDFMaker:
         return buf.read()
 
 
-# ─────────────────────────────────────────────────────────
-# 8. HTML SLAYT MOTORU
-# ─────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# 8. HTML SLAYT MOTORU — Broadcast estetiği
+# ══════════════════════════════════════════════════════════════
 
-def build_slide_html(segments: list[dict]) -> str:
+def build_slide_html(segments: list[dict], audio_map: dict[str, str] = None) -> str:
+    """
+    audio_map: {karakter: base64_mp3} — ses varsa otomatik oynatır
+    """
     data = json.dumps([
         {
             "char":  s["character"],
             "text":  s["text"],
             "emoji": s["info"]["emoji"],
             "color": s["info"]["color"],
-            "bg":    s["info"].get("bg_rgb", [30, 30, 80]),
-            "dark":  s["info"].get("dark_rgb", [10, 10, 30]),
-            "anim":  s["info"].get("animation", "pulse"),
+            "role":  s["info"].get("role",""),
+            "bg":    list(s["info"].get("bg_rgb",  [20,40,80])),
+            "dark":  list(s["info"].get("dark_rgb",[5,10,25])),
+            "anim":  s["info"].get("animation","pulse"),
+            "audio": (audio_map or {}).get(s["character"], ""),
         }
         for s in segments
-    ])
+    ], ensure_ascii=False)
 
-    return f"""<!DOCTYPE html>
+    html = """<!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
-  *{{margin:0;padding:0;box-sizing:border-box;}}
-  body{{font-family:'Segoe UI',system-ui,sans-serif;overflow:hidden;height:100vh;display:flex;flex-direction:column;background:#0a0a14;}}
-  #prog{{height:5px;flex-shrink:0;background:rgba(255,255,255,.07);}}
-  #pfill{{height:100%;width:0%;transition:width .45s ease;}}
-  #stage{{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 36px;position:relative;}}
-  .orb{{width:120px;height:120px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:52px;position:relative;margin-bottom:10px;box-shadow:0 0 40px rgba(0,0,0,0.5);}}
-  .orb::after{{content:'';position:absolute;top:14px;left:22px;width:36px;height:18px;border-radius:50%;background:rgba(255,255,255,.25);transform:rotate(-20deg);}}
-  .cname{{font-size:18px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:18px;}}
-  .bubble{{background:rgba(245,245,255,.13);backdrop-filter:blur(18px);border-radius:22px;padding:22px 34px;max-width:680px;text-align:center;font-size:18px;line-height:1.7;border:1.5px solid rgba(255,255,255,.15);box-shadow:0 12px 50px rgba(0,0,0,.45);position:relative;}}
-  .bubble::after{{content:'';position:absolute;top:-14px;left:50%;transform:translateX(-50%);border:14px solid transparent;border-bottom-color:rgba(245,245,255,.13);}}
-  .waves{{display:flex;gap:5px;align-items:flex-end;height:36px;margin-top:18px;}}
-  .wb{{width:7px;border-radius:4px;animation:wb .5s ease-in-out infinite;}}
-  #ctrl{{display:flex;gap:10px;align-items:center;justify-content:center;padding:12px;background:rgba(0,0,0,.55);flex-shrink:0;}}
-  button{{padding:8px 20px;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;letter-spacing:.03em;transition:all .18s;}}
-  #bprev{{background:rgba(255,255,255,.1);color:#fff;}}
-  #bnext{{background:#27ae60;color:#fff;}}
-  #bplay{{background:#2980b9;color:#fff;}}
-  button:hover{{transform:translateY(-2px);filter:brightness(1.15);}}
-  #cnt{{color:rgba(255,255,255,.4);font-size:13px;padding:0 6px;min-width:50px;text-align:center;}}
-  @keyframes wb{{0%,100%{{transform:scaleY(.3)}}50%{{transform:scaleY(1)}}}}
-  @keyframes bounce{{0%,100%{{transform:translateY(0)}}50%{{transform:translateY(-18px)}}}}
-  @keyframes pulse{{0%,100%{{transform:scale(1)}}50%{{transform:scale(1.14)}}}}
-  @keyframes float{{0%,100%{{transform:translateY(-9px) rotate(-3deg)}}50%{{transform:translateY(9px) rotate(3deg)}}}}
-  @keyframes shake{{0%,100%{{transform:rotate(0)}}25%{{transform:rotate(-7deg)}}75%{{transform:rotate(7deg)}}}}
-  @keyframes slideIn{{from{{opacity:0;transform:translateY(32px)}}to{{opacity:1;transform:translateY(0)}}}}
-  @keyframes typeText{{from{{clip-path:inset(0 100% 0 0)}}to{{clip-path:inset(0 0 0 0)}}}}
-  .in{{animation:slideIn .4s ease both;}}
-  #btext{{display:inline-block;}}
+:root{--gold:#C9A84C;--blue:#4C9FCA;--green:#A0C878;}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:'DM Sans',sans-serif;background:#06060f;color:#eee;height:100vh;overflow:hidden;display:flex;flex-direction:column;}
+
+/* Top bar */
+#topbar{height:52px;flex-shrink:0;background:rgba(6,6,18,.95);display:flex;align-items:center;justify-content:space-between;padding:0 24px;border-bottom:2px solid var(--gold);}
+#show-title{font-family:'DM Serif Display',serif;font-size:16px;letter-spacing:.12em;color:var(--gold);}
+#live-dot{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:#ff5050;letter-spacing:.1em;}
+#live-dot span{width:8px;height:8px;border-radius:50%;background:#ff5050;animation:livepulse 1.2s ease-in-out infinite;}
+@keyframes livepulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)}}
+
+/* Progress */
+#prog{height:3px;flex-shrink:0;background:rgba(255,255,255,.08);}
+#pfill{height:100%;width:0%;transition:width .5s ease;}
+
+/* Stage */
+#stage{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px 32px;position:relative;transition:background .7s ease;}
+
+/* Grid overlay */
+#stage::before{content:'';position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);background-size:55px 55px;pointer-events:none;}
+
+/* Orb */
+.orb{width:130px;height:130px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:56px;position:relative;margin-bottom:8px;}
+.orb::after{content:'';position:absolute;top:16px;left:24px;width:34px;height:16px;border-radius:50%;background:rgba(255,255,255,.22);transform:rotate(-20deg);}
+
+/* Name & role */
+.char-name{font-family:'DM Serif Display',serif;font-size:22px;letter-spacing:.06em;margin-bottom:4px;}
+.char-role{font-size:11px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;opacity:.7;margin-bottom:18px;}
+
+/* Waves */
+.waves{display:flex;gap:4px;align-items:flex-end;height:32px;margin-bottom:16px;}
+.wb{width:7px;border-radius:4px;animation:wb .5s ease-in-out infinite;}
+@keyframes wb{0%,100%{transform:scaleY(.25)}50%{transform:scaleY(1)}}
+
+/* Bubble */
+.bubble{background:rgba(248,248,255,.11);backdrop-filter:blur(20px);border-radius:20px;padding:20px 32px;max-width:700px;width:100%;text-align:center;font-size:17px;line-height:1.75;border:1.5px solid rgba(255,255,255,.13);box-shadow:0 16px 60px rgba(0,0,0,.5);position:relative;}
+.bubble::before{content:'';position:absolute;top:-13px;left:50%;transform:translateX(-50%);border:13px solid transparent;border-bottom-color:rgba(248,248,255,.11);}
+#btext{display:inline-block;}
+
+/* Controls */
+#ctrl{display:flex;gap:8px;align-items:center;justify-content:center;padding:12px;background:rgba(6,6,18,.85);border-top:1px solid rgba(255,255,255,.07);flex-shrink:0;}
+button{padding:8px 18px;border:none;border-radius:7px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:700;letter-spacing:.05em;transition:all .18s;}
+#bprev{background:rgba(255,255,255,.09);color:#fff;}
+#bnext{background:#1a6e3a;color:#fff;}
+#bplay{background:#1a3f6e;color:#fff;}
+button:hover{transform:translateY(-2px);filter:brightness(1.2);}
+#cnt{color:rgba(255,255,255,.35);font-size:12px;min-width:48px;text-align:center;font-variant-numeric:tabular-nums;}
+
+/* Bottom bar */
+#botbar{height:38px;flex-shrink:0;background:rgba(6,6,18,.95);display:flex;align-items:center;justify-content:space-between;padding:0 24px;border-top:2px solid rgba(255,255,255,.07);}
+#char-info{font-size:12px;font-weight:600;letter-spacing:.08em;}
+#slide-no{font-size:11px;color:rgba(255,255,255,.35);font-variant-numeric:tabular-nums;}
+
+/* Animations */
+@keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-18px)}}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
+@keyframes float{0%,100%{transform:translateY(-9px) rotate(-3deg)}50%{transform:translateY(9px) rotate(3deg)}}
+@keyframes shake{0%,100%{transform:rotate(0)}25%{transform:rotate(-6deg)}75%{transform:rotate(6deg)}}
+@keyframes slideUp{from{opacity:0;transform:translateY(28px)}to{opacity:1;transform:translateY(0)}}
+@keyframes typeText{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+.in{animation:slideUp .42s ease both;}
 </style>
 </head>
 <body>
-<div id="prog"><div id="pfill"></div></div>
-<div id="stage" id="stage">
-  <div class="orb" id="orb">🎤</div>
-  <div class="cname" id="cname" style="color:#fff"></div>
-  <div class="bubble">
-    <span id="btext"></span>
-  </div>
-  <div class="waves" id="waves"></div>
+
+<div id="topbar">
+  <div id="show-title">3 SORU · 3 DAKİKA</div>
+  <div id="live-dot"><span></span>YAYIN</div>
 </div>
+<div id="prog"><div id="pfill"></div></div>
+
+<div id="stage">
+  <div class="orb" id="orb">🎤</div>
+  <div class="char-name" id="cname">—</div>
+  <div class="char-role" id="crole">—</div>
+  <div class="waves" id="waves"></div>
+  <div class="bubble"><span id="btext"></span></div>
+</div>
+
 <div id="ctrl">
   <button id="bprev" onclick="go(-1)">◀ Geri</button>
   <span id="cnt">1/1</span>
@@ -869,270 +730,290 @@ def build_slide_html(segments: list[dict]) -> str:
   <button id="bnext" onclick="go(1)">İleri ▶</button>
 </div>
 
+<div id="botbar">
+  <div id="char-info" style="color:#fff"></div>
+  <div id="slide-no">0/0</div>
+</div>
+
+<audio id="player" style="display:none"></audio>
+
 <script>
-const SLIDES = {data};
-let cur = 0, playing = false, timer = null;
+const SLIDES = __SLIDES_DATA__;
+let cur=0,playing=false,timer=null;
 
-function rgb(arr){{ return `rgb(${{arr[0]}},${{arr[1]}},${{arr[2]}})`;}}
-function lerp(a,b,t){{ return a+(b-a)*t; }}
-function lerpRGB(a,b,t){{ return [lerp(a[0],b[0],t),lerp(a[1],b[1],t),lerp(a[2],b[2],t)].map(Math.round); }}
+function rgb(a){return `rgb(${a[0]},${a[1]},${a[2]})`;}
+function grad(bg,dark){return `linear-gradient(160deg,${rgb(dark)} 0%,${rgb(bg)} 100%)`;}
 
-function buildGrad(bg, dark){{
-  return `linear-gradient(170deg, ${{rgb(dark)}} 0%, ${{rgb(bg)}} 100%)`;
-}}
+function render(i){
+  const s=SLIDES[i];
+  const stage=document.getElementById('stage');
+  stage.style.background=grad(s.bg,s.dark);
 
-function render(i){{
-  const s = SLIDES[i];
-  const stage = document.getElementById('stage');
+  const orb=document.getElementById('orb');
+  orb.textContent=s.emoji;
+  orb.style.background=`radial-gradient(circle at 35% 38%,${s.color}cc,${s.color}33)`;
+  orb.style.boxShadow=`0 0 55px ${s.color}44,0 0 20px ${s.color}22`;
+  orb.style.animation='none'; void orb.offsetWidth;
+  orb.style.animation=s.anim+' .85s ease-in-out infinite';
 
-  // background
-  stage.style.background = buildGrad(s.bg, s.dark);
+  document.getElementById('cname').textContent=s.char;
+  document.getElementById('cname').style.color=s.color;
+  document.getElementById('crole').textContent=s.role;
+  document.getElementById('crole').style.color=s.color;
 
-  // orb
-  const orb = document.getElementById('orb');
-  orb.textContent = s.emoji;
-  orb.style.background = `radial-gradient(circle at 35% 40%, ${{s.color}}cc, ${{s.color}}44)`;
-  orb.style.boxShadow = `0 0 60px ${{s.color}}55`;
-  orb.style.animation = 'none';
-  void orb.offsetWidth;
-  orb.style.animation = s.anim + ' 0.8s ease-in-out infinite';
+  const bub=document.querySelector('.bubble');
+  bub.style.borderColor=s.color+'33';
+  bub.style.boxShadow=`0 16px 60px ${s.color}20`;
 
-  // name
-  const cn = document.getElementById('cname');
-  cn.textContent = s.char;
-  cn.style.color = s.color;
+  const bt=document.getElementById('btext');
+  bt.textContent=s.text;
+  bt.style.animation='none'; void bt.offsetWidth;
+  bt.style.animation='typeText 1.8s steps(70,end) forwards';
 
-  // bubble border
-  const bub = document.querySelector('.bubble');
-  bub.style.borderColor = s.color + '44';
-  bub.style.boxShadow = `0 12px 50px ${{s.color}}25`;
-
-  // text typewriter
-  const bt = document.getElementById('btext');
-  bt.textContent = s.text;
-  bt.style.animation = 'none';
-  void bt.offsetWidth;
-  bt.style.animation = 'typeText 1.6s steps(65,end) forwards';
-
-  // wave bars
-  const wv = document.getElementById('waves');
-  wv.innerHTML = '';
-  for(let j=0;j<9;j++){{
-    const b = document.createElement('div');
-    b.className = 'wb';
-    b.style.background = s.color;
-    b.style.height = (10 + Math.random()*30) + 'px';
-    b.style.animationDelay = (j*0.06) + 's';
-    b.style.animationDuration = (0.35 + Math.random()*0.45) + 's';
+  const wv=document.getElementById('waves');
+  wv.innerHTML='';
+  for(let j=0;j<11;j++){
+    const b=document.createElement('div');
+    b.className='wb';
+    b.style.background=s.color;
+    b.style.height=(8+Math.random()*26)+'px';
+    b.style.animationDelay=(j*.06)+'s';
+    b.style.animationDuration=(.32+Math.random()*.42)+'s';
     wv.appendChild(b);
-  }}
+  }
 
-  // entrance
-  stage.className = 'in';
+  stage.className='in';
+  document.getElementById('pfill').style.width=((i+1)/SLIDES.length*100)+'%';
+  document.getElementById('pfill').style.background=s.color;
+  document.getElementById('cnt').textContent=(i+1)+' / '+SLIDES.length;
+  document.getElementById('char-info').textContent=s.char+' · '+s.role;
+  document.getElementById('char-info').style.color=s.color;
+  document.getElementById('slide-no').textContent=(i+1)+' / '+SLIDES.length;
 
-  // progress
-  document.getElementById('pfill').style.width = ((i+1)/SLIDES.length*100)+'%';
-  document.getElementById('pfill').style.background = s.color;
-  document.getElementById('cnt').textContent = (i+1)+' / '+SLIDES.length;
-}}
+  // Otomatik ses oynat
+  if(s.audio){
+    const player=document.getElementById('player');
+    player.src='data:audio/mp3;base64,'+s.audio;
+    player.play().catch(()=>{});
+  }
+}
 
-function go(d){{
-  cur = (cur + d + SLIDES.length) % SLIDES.length;
-  render(cur);
-}}
+function go(d){cur=(cur+d+SLIDES.length)%SLIDES.length;render(cur);}
 
-function togglePlay(){{
-  playing = !playing;
-  document.getElementById('bplay').textContent = playing ? '⏸ Durdur' : '▶ Oynat';
-  if(playing) loop(); else clearTimeout(timer);
-}}
+function togglePlay(){
+  playing=!playing;
+  document.getElementById('bplay').textContent=playing?'⏸ Durdur':'▶ Oynat';
+  if(playing)loop(); else clearTimeout(timer);
+}
 
-function loop(){{
-  if(!playing) return;
-  go(1);
-  timer = setTimeout(loop, 4500);
-}}
+function loop(){
+  if(!playing)return;
+  const s=SLIDES[cur];
+  const dur=s.audio?0:4500;
+  if(s.audio){
+    const player=document.getElementById('player');
+    player.onended=()=>{go(1);loop();};
+  } else {
+    timer=setTimeout(()=>{go(1);loop();},dur);
+  }
+}
 
-if(SLIDES.length > 0) render(0);
+if(SLIDES.length>0)render(0);
 </script>
 </body>
 </html>"""
 
+    return html.replace("__SLIDES_DATA__", data)
 
-# ─────────────────────────────────────────────────────────
-# 9. CSS
-# ─────────────────────────────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════
+# 9. CSS — Broadcast Editorial
+# ══════════════════════════════════════════════════════════════
 
 CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700;800&family=JetBrains+Mono:wght@400&display=swap');
-html,body,[class*="css"]   { font-family:'Sora',sans-serif; }
-.stApp                     { background:linear-gradient(145deg,#08080f,#0f1018 55%,#0a0d15); color:#e8e8f4; }
-section[data-testid="stSidebar"] { background:rgba(8,8,18,.97); border-right:1px solid rgba(255,255,255,.05); }
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;600;700&family=JetBrains+Mono:wght@400&display=swap');
 
-.hdr   { text-align:center; padding:1.6rem 1rem .9rem; }
-.hdr h1{ font-size:2.5rem; font-weight:800;
-         background:linear-gradient(90deg,#E74C3C,#ff9a9a,#3498DB,#a8d8ff,#2ECC71);
-         -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-         background-clip:text; letter-spacing:-1px; margin-bottom:.2rem; }
-.hdr p { color:#778; font-size:.87rem; letter-spacing:.07em; }
+:root {
+  --gold:   #C9A84C;
+  --blue:   #4C9FCA;
+  --green:  #A0C878;
+  --bg:     #06060f;
+  --surface:#0e0e1e;
+}
 
-.sc    { border-radius:12px; padding:.85rem 1.05rem; margin:.42rem 0;
-         border-left:4px solid; background:rgba(255,255,255,.04);
-         transition:transform .14s; }
-.sc:hover { transform:translateX(4px); }
-.sc-c  { font-size:.68rem; font-weight:700; letter-spacing:.12em;
-         text-transform:uppercase; margin-bottom:.28rem; }
-.sc-t  { font-size:.9rem; line-height:1.6; color:#ccd; }
+html,body,[class*="css"] { font-family:'DM Sans',sans-serif; }
 
-.sr    { display:flex; gap:1rem; padding:.65rem .9rem;
-         background:rgba(255,255,255,.04); border-radius:8px;
-         margin:.6rem 0; font-size:.78rem; color:#aaa; }
-.sr strong { color:#eee; }
+.stApp {
+  background: radial-gradient(ellipse at 20% 50%, #0d1a2e 0%, #06060f 60%);
+  color: #e8e8f0;
+}
 
-.bdg   { display:inline-flex; align-items:center; gap:.3rem;
-         padding:.26rem .65rem; border-radius:50px; font-size:.7rem;
-         font-weight:600; margin:.15rem; }
-.bok   { background:rgba(46,204,113,.12); color:#2ECC71; border:1px solid rgba(46,204,113,.28); }
-.bwn   { background:rgba(231,76,60,.12);  color:#E74C3C; border:1px solid rgba(231,76,60,.28); }
+/* Sidebar */
+section[data-testid="stSidebar"] {
+  background: rgba(6,6,18,.97);
+  border-right: 1px solid rgba(201,168,76,.15);
+}
 
-.sct   { font-size:.66rem; letter-spacing:.14em; text-transform:uppercase;
-         color:#555; margin:.75rem 0 .35rem; }
+/* Header */
+.hdr {
+  text-align:center;
+  padding: 1.4rem 1rem .8rem;
+  border-bottom: 1px solid rgba(201,168,76,.15);
+  margin-bottom: 1rem;
+}
+.hdr h1 {
+  font-family: 'DM Serif Display', serif;
+  font-size: 2.4rem;
+  font-weight: 400;
+  letter-spacing: .05em;
+  background: linear-gradient(90deg,#C9A84C,#f0d080,#C9A84C);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: .2rem;
+}
+.hdr p { color: #667; font-size: .82rem; letter-spacing: .1em; text-transform: uppercase; }
 
-audio  { width:100%; border-radius:8px; margin:3px 0; }
-textarea { background:rgba(255,255,255,.04)!important; border-radius:10px!important;
-           color:#eee!important; font-family:'JetBrains Mono',monospace!important;
-           font-size:.82rem!important; }
-hr     { border-color:rgba(255,255,255,.07); }
+/* Segment cards */
+.sc {
+  border-radius: 10px;
+  padding: .8rem 1rem;
+  margin: .4rem 0;
+  border-left: 3px solid;
+  background: rgba(255,255,255,.03);
+  transition: transform .13s, background .13s;
+}
+.sc:hover { transform: translateX(5px); background: rgba(255,255,255,.06); }
+.sc-c { font-size:.66rem; font-weight:700; letter-spacing:.14em; text-transform:uppercase; margin-bottom:.25rem; }
+.sc-t { font-size:.88rem; line-height:1.6; color:#bbc; }
+
+/* Stats */
+.sr {
+  display:flex; gap:1rem; padding:.6rem .9rem;
+  background:rgba(201,168,76,.07); border-radius:8px;
+  margin:.5rem 0; font-size:.77rem; color:#888;
+  border: 1px solid rgba(201,168,76,.15);
+}
+.sr strong { color: var(--gold,#C9A84C); }
+
+/* Badges */
+.bdg {
+  display:inline-flex; align-items:center; gap:.3rem;
+  padding:.24rem .62rem; border-radius:50px;
+  font-size:.7rem; font-weight:700; margin:.15rem;
+}
+.bok { background:rgba(160,200,120,.1); color:#A0C878; border:1px solid rgba(160,200,120,.25); }
+.bwn { background:rgba(220,80,80,.1);   color:#E07B7B; border:1px solid rgba(220,80,80,.25);   }
+
+.sct {
+  font-size:.63rem; letter-spacing:.16em;
+  text-transform:uppercase; color:#445;
+  margin:.7rem 0 .32rem;
+}
+
+/* Voice upload area */
+.upload-zone {
+  border: 1.5px dashed rgba(201,168,76,.35);
+  border-radius: 12px;
+  padding: 1.2rem;
+  margin: .5rem 0;
+  background: rgba(201,168,76,.04);
+  text-align: center;
+}
+
+audio { width:100%; border-radius:7px; margin:3px 0; }
+textarea {
+  background:rgba(255,255,255,.04)!important;
+  border-radius:10px!important;
+  color:#eee!important;
+  font-family:'JetBrains Mono',monospace!important;
+  font-size:.82rem!important;
+  border: 1px solid rgba(201,168,76,.15)!important;
+}
+hr { border-color:rgba(255,255,255,.06); }
 .stProgress>div>div { border-radius:10px; }
 </style>
 """
 
 
-# ─────────────────────────────────────────────────────────
-# 10. STATE & SIDEBAR
-# ─────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# 10. STATE
+# ══════════════════════════════════════════════════════════════
 
 def init_state():
     defaults = dict(
         segs=[], audio_segs=[], full_audio=None,
-        pres_html="", history=[], api_ok=False,
+        pres_html="", history=[], voice_map={},
     )
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
 
-def sidebar() -> dict:
-    """Sidebar — TTS motor seçimi + ayarlar. tts_config dict döner."""
+# ══════════════════════════════════════════════════════════════
+# 11. SIDEBAR — Ses Yükleme
+# ══════════════════════════════════════════════════════════════
+
+def sidebar():
     with st.sidebar:
-        st.markdown("### 🎬 3 Soru 3 Dakika")
-        st.markdown("---")
-
-        st.markdown('<p class="sct">🎙️ Ses Motoru</p>', unsafe_allow_html=True)
-
-        engine = st.radio(
-            "Motor",
-            ["🆓 Edge TTS (Microsoft) — Önerilen",
-             "🆓 gTTS (Google)",
-             "💳 OpenAI TTS",
-             "🎤 ElevenLabs (Klon Ses)"],
-            label_visibility="collapsed",
+        st.markdown(
+            '<div style="text-align:center;padding:1rem 0 .5rem;">'
+            '<div style="font-family:serif;font-size:1.3rem;color:#C9A84C;letter-spacing:.1em;">🎙️ STÜDYO</div>'
+            '<div style="font-size:.65rem;color:#445;letter-spacing:.15em;text-transform:uppercase;margin-top:2px;">3 Soru 3 Dakika</div>'
+            '</div>',
+            unsafe_allow_html=True,
         )
-        tts_config = {}
-
-        # ── Edge TTS (varsayılan) ─────────────────────────
-        if "Edge" in engine:
-            tts_config["engine"] = "edge"
-            if EdgeTTS.available():
-                st.success("✅ Hazır! API key gerekmez.")
-            else:
-                st.warning("⚠️ Bir kez kurmanız gerekiyor:")
-                st.code("pip install edge-tts", language="bash")
-            st.markdown('<p class="sct">Karakter → Ses Eşlemesi</p>', unsafe_allow_html=True)
-            char_voices = {}
-            for ch in CHARACTERS:
-                default = EDGE_CHARACTER_VOICES.get(ch, "tr-TR-EbaNeural")
-                choice  = st.selectbox(
-                    ch, list(EDGE_VOICES.keys()),
-                    index=0 if "Eba" in default else 1,
-                    key=f"edge_{ch}",
-                )
-                char_voices[ch] = EDGE_VOICES[choice]
-            tts_config["char_voices"] = char_voices
-
-        # ── gTTS ─────────────────────────────────────────
-        elif "gTTS" in engine:
-            tts_config["engine"] = "gtts"
-            if GTTS.available():
-                st.success("✅ Hazır! API key gerekmez.")
-            else:
-                st.warning("⚠️ Bir kez kurmanız gerekiyor:")
-                st.code("pip install gtts", language="bash")
-            st.info("ℹ️ Tüm karakterler aynı Türkçe sesi kullanır.")
-
-        # ── OpenAI TTS ───────────────────────────────────
-        elif "OpenAI" in engine:
-            tts_config["engine"] = "openai"
-            if "openai_key" not in st.session_state:
-                st.session_state.openai_key = ""
-            okey = st.text_input("OpenAI API Key", type="password",
-                                 placeholder="sk-...",
-                                 value=st.session_state.openai_key)
-            if okey:
-                st.session_state.openai_key = okey
-            tts_config["key"] = okey
-            OPENAI_VOICES = ["alloy", "echo", "fable", "onyx", "nova", "shimmer"]
-            st.markdown('<p class="sct">Karakter → Ses</p>', unsafe_allow_html=True)
-            char_voices = {}
-            for i, ch in enumerate(CHARACTERS):
-                char_voices[ch] = st.selectbox(ch, OPENAI_VOICES,
-                                               index=i % len(OPENAI_VOICES),
-                                               key=f"oai_{ch}")
-            tts_config["char_voices"] = char_voices
-
-        # ── ElevenLabs ───────────────────────────────────
-        elif "ElevenLabs" in engine:
-            tts_config["engine"] = "elevenlabs"
-            if "el_key" not in st.session_state:
-                st.session_state.el_key = ""
-            el_key = st.text_input("ElevenLabs API Key", type="password",
-                                   placeholder="sk_...",
-                                   value=st.session_state.el_key)
-            if el_key:
-                st.session_state.el_key = el_key
-            if el_key and st.button("🔌 Bağlan", use_container_width=True):
-                try:
-                    api = ElevenLabsAPI(el_key)
-                    ok, msg = api.check()
-                    st.session_state.el_ok  = ok
-                    st.session_state.el_msg = msg
-                except Exception as e:
-                    st.session_state.el_ok  = False
-                    st.session_state.el_msg = str(e)
-            el_msg = st.session_state.get("el_msg", "")
-            if el_msg:
-                (st.success if st.session_state.get("el_ok") else st.error)(
-                    f"{'✅' if st.session_state.get('el_ok') else '❌'} {el_msg}"
-                )
-            tts_config["key"] = el_key
-            tts_config["stab"] = st.slider("Kararlılık", 0.0, 1.0, 0.5, 0.05)
-            tts_config["sim"]  = st.slider("Benzerlik",  0.0, 1.0, 0.75, 0.05)
-            if el_key and st.session_state.get("el_ok"):
-                if st.button("🎧 Sesleri Listele", use_container_width=True):
-                    for v in ElevenLabsAPI(el_key).list_voices()[:15]:
-                        st.code(f"{v['name']}\n{v['voice_id']}", language=None)
-
-        # ── Ortak ─────────────────────────────────────────
         st.markdown("---")
-        st.markdown('<p class="sct">🎭 Karakterler</p>', unsafe_allow_html=True)
-        for ch, info in CHARACTERS.items():
-            st.markdown(f"{info['emoji']} **{ch}**")
+
+        # ── Ses Yükleme ──────────────────────────────────
+        st.markdown('<p class="sct">🎤 Kendi Sesinizi Yükleyin</p>', unsafe_allow_html=True)
+        st.caption("Her karaktere farklı ses atayabilir veya hepsine aynı sesi verebilirsiniz.")
+
+        voice_map = {}
+
+        # Tek genel ses seçeneği
+        use_single = st.checkbox("Hepsi için tek ses kullan", value=True)
+
+        if use_single:
+            uf = st.file_uploader(
+                "Genel ses (MP3/WAV)",
+                type=["mp3","wav","m4a","ogg"],
+                key="voice_single",
+            )
+            if uf:
+                audio_bytes = uf.read()
+                for ch in CHARACTERS:
+                    voice_map[ch] = audio_bytes
+                st.audio(audio_bytes, format="audio/mp3")
+                st.success(f"✅ {len(CHARACTERS)} karaktere atandı")
+        else:
+            for ch, info in CHARACTERS.items():
+                st.markdown(
+                    f'<div style="font-size:.75rem;font-weight:700;color:{info["color"]};'
+                    f'letter-spacing:.08em;margin:.5rem 0 .15rem;">'
+                    f'{info["emoji"]} {ch} · {info["role"]}</div>',
+                    unsafe_allow_html=True,
+                )
+                uf = st.file_uploader(
+                    f"{ch} ses dosyası",
+                    type=["mp3","wav","m4a","ogg"],
+                    key=f"voice_{ch}",
+                    label_visibility="collapsed",
+                )
+                if uf:
+                    ab = uf.read()
+                    voice_map[ch] = ab
+                    st.audio(ab, format="audio/mp3")
+
+        if voice_map:
+            st.session_state.voice_map = voice_map
 
         st.markdown("---")
+
+        # ── Bağımlılık durumu ─────────────────────────────
         st.markdown('<p class="sct">📦 Kütüphaneler</p>', unsafe_allow_html=True)
-        for lib, name in [("gtts","gtts"), ("edge_tts","edge-tts"),
-                          ("PIL","Pillow"), ("imageio","imageio[ffmpeg]"),
+        for lib, name in [("PIL","Pillow"),("imageio","imageio[ffmpeg]"),
                           ("reportlab","reportlab")]:
             try:
                 __import__(lib)
@@ -1141,108 +1022,78 @@ def sidebar() -> dict:
                 st.markdown(f"🔴 {name}")
 
         st.markdown("---")
-        st.caption("v3.1 | gTTS / Edge / OpenAI / ElevenLabs")
+        st.caption("v4.0 · Kendi Sesin · Broadcast Tasarım")
 
-    return tts_config
-
-
-# ─────────────────────────────────────────────────────────
-# 11. SES ÜRETIMI — Çok Motorlu
-# ─────────────────────────────────────────────────────────
-
-def synthesize_one(text: str, char: str, tts_config: dict) -> Optional[bytes]:
-    """Seçili TTS motoruyla tek segment seslendir."""
-    engine = tts_config.get("engine", "edge")
-
-    if engine == "edge":
-        voice = tts_config.get("char_voices", {}).get(char, "tr-TR-EbaNeural")
-        return EdgeTTS.synthesize(text, voice)
-
-    elif engine == "gtts":
-        return GTTS.synthesize(text)
-
-    elif engine == "openai":
-        key   = tts_config.get("key", "")
-        voice = tts_config.get("char_voices", {}).get(char, "onyx")
-        if not key:
-            st.warning("OpenAI API key girilmedi.")
-            return None
-        return OpenAITTS(key).synthesize(text, voice)
-
-    elif engine == "elevenlabs":
-        key     = tts_config.get("key", "")
-        stab    = tts_config.get("stab", 0.5)
-        sim     = tts_config.get("sim", 0.75)
-        vid     = VOICE_IDS.get(char, "")
-        if not key or not vid or vid == "KENDI_SES_ID_BURAYA":
-            return None
-        return ElevenLabsAPI(key).tts(text, vid, stab, sim)
-
-    return None
+    return st.session_state.get("voice_map", {})
 
 
-def generate_audio(segs: list, tts_config: dict) -> list:
-    out = []
-    n   = len(segs)
-    pb  = st.progress(0, "Sesler hazırlanıyor...")
-    ph  = st.empty()
+# ══════════════════════════════════════════════════════════════
+# 12. PODCAST OLUŞTURMA — Kendi sesini kullan
+# ══════════════════════════════════════════════════════════════
 
-    engine_name = {
-        "edge": "Edge TTS (Microsoft)",
-        "gtts": "Google TTS",
-        "openai": "OpenAI TTS",
-        "elevenlabs": "ElevenLabs",
-    }.get(tts_config.get("engine", "edge"), "TTS")
+def build_podcast(segs: list[dict], voice_map: dict) -> list[dict]:
+    """
+    Her segmente karşılık gelen sesi atar.
+    Ses atanmışsa doğrudan kullanır; atanmamışsa None bırakır.
+    """
+    vm    = VoiceManager(voice_map)
+    out   = []
+    n     = len(segs)
+    pb    = st.progress(0, "Ses segmentleri hazırlanıyor…")
+    ph    = st.empty()
 
     for i, seg in enumerate(segs):
-        ch = seg["character"]
-        ph.markdown(f"🎙️ **{seg['info']['emoji']} {ch}** — {engine_name} ile seslendiriliyor… ({i+1}/{n})")
-
-        audio = synthesize_one(seg["text"], ch, tts_config)
+        ch    = seg["character"]
+        ph.markdown(
+            f'🎙️ **{seg["info"]["emoji"]} {ch}** hazırlanıyor… ({i+1}/{n})'
+        )
+        audio = vm.get_audio(ch)
         dur   = mp3_duration(audio) if audio else 3.0
+
+        # Gerçek bir podcast'te her satır aynı ses dosyasından gelir.
+        # Burası gelecekte TTS ile değiştirilebilir.
         out.append({**seg, "audio": audio, "duration": dur})
+        pb.progress((i+1)/n, f"{i+1}/{n}")
+        time.sleep(0.05)
 
-        if tts_config.get("engine") in ("elevenlabs", "openai"):
-            time.sleep(0.5)  # rate limit
-
-        pb.progress((i+1)/n, f"{i+1}/{n} segment")
-
-    ph.success(f"✅ {n} segment tamamlandı!")
+    ph.success(f"✅ {n} segment hazır!")
     return out
 
 
-# ─────────────────────────────────────────────────────────
-# 12. MAIN
-# ─────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════
+# 13. MAIN
+# ══════════════════════════════════════════════════════════════
 
 def main():
     st.set_page_config(
-        page_title="3 Soru 3 Dakika",
-        page_icon="🎬",
+        page_title="3 Soru 3 Dakika · Stüdyo",
+        page_icon="🎙️",
         layout="wide",
         initial_sidebar_state="expanded",
     )
     st.markdown(CSS, unsafe_allow_html=True)
     init_state()
-    tts_config = sidebar()
+    voice_map = sidebar()
 
+    # Header
     st.markdown(
-        '<div class="hdr"><h1>🎬 3 Soru 3 Dakika</h1>'
-        '<p>Kendi sesinizle animasyonlu slaytlar · MP4 Video · PDF</p></div>',
+        '<div class="hdr">'
+        '<h1>3 Soru · 3 Dakika</h1>'
+        '<p>Profesyonel Podcast &amp; Sunum Stüdyosu</p>'
+        '</div>',
         unsafe_allow_html=True,
     )
 
     tab_script, tab_live, tab_video, tab_pdf = st.tabs(
-        ["✏️ Senaryo & Ses", "🖥️ Canlı Sunum", "🎞️ MP4 Video", "📄 PDF"]
+        ["✏️ Senaryo", "🖥️ Canlı Sunum", "🎞️ Video", "📄 PDF"]
     )
 
-    # ═══════════════════════════════════════════
-    # TAB 1 — Senaryo
-    # ═══════════════════════════════════════════
+    # ══ TAB 1: Senaryo ════════════════════════════════════
     with tab_script:
-        col_l, col_r = st.columns([1, 1], gap="large")
+        col_l, col_r = st.columns([1,1], gap="large")
 
         with col_l:
+            # Şablonlar
             st.markdown('<p class="sct">📂 Hazır Şablonlar</p>', unsafe_allow_html=True)
             tc = st.columns(3)
             for idx, (lbl, content) in enumerate(TEMPLATES.items()):
@@ -1252,13 +1103,9 @@ def main():
 
             script = st.text_area(
                 "Senaryo",
-                value=st.session_state.get("_tpl", ""),
-                height=390,
-                placeholder=(
-                    "Sunucu: Merhaba!\n"
-                    "Konuk: Hoş geldiniz!\n"
-                    "Dis Ses: Bugün..."
-                ),
+                value=st.session_state.get("_tpl",""),
+                height=400,
+                placeholder="Elif: Merhaba!\nEcem: Hoş geldiniz!\nEba: Bugünün konusu…",
                 label_visibility="collapsed",
             )
 
@@ -1279,209 +1126,207 @@ def main():
                 )
                 st.session_state.segs = segs
 
-        with col_r:
-            # voice status badges
+            # Ses durumu
             st.markdown('<p class="sct">🔊 Ses Durumu</p>', unsafe_allow_html=True)
+            vm_now = st.session_state.get("voice_map",{})
             badges = ""
             for ch, info in CHARACTERS.items():
-                vid = VOICE_IDS.get(ch, "")
-                ok  = bool(vid and vid not in ("KENDI_SES_ID_BURAYA", ""))
+                ok  = ch in vm_now
                 cls = "bok" if ok else "bwn"
                 ic  = "✓" if ok else "✗"
                 badges += f'<span class="bdg {cls}">{info["emoji"]} {ch} {ic}</span>'
             st.markdown(badges, unsafe_allow_html=True)
+            if not vm_now:
+                st.info("💡 Sol panelden ses dosyanızı yükleyin.")
 
-            st.markdown("---")
-
-            # segment preview
+        with col_r:
             st.markdown('<p class="sct">👁️ Önizleme</p>', unsafe_allow_html=True)
             for s in st.session_state.segs:
                 c = s["info"]["color"]
                 st.markdown(
                     f'<div class="sc" style="border-color:{c};">'
-                    f'<div class="sc-c" style="color:{c};">{s["info"]["emoji"]} {s["character"]}</div>'
+                    f'<div class="sc-c" style="color:{c};">'
+                    f'{s["info"]["emoji"]} {s["character"]} · {s["info"]["role"]}</div>'
                     f'<div class="sc-t">{s["text"]}</div></div>',
                     unsafe_allow_html=True,
                 )
 
             st.markdown("---")
             b1, b2 = st.columns(2)
-            gen_btn = b1.button("🚀 Sesleri Oluştur", use_container_width=True, type="primary")
+            gen_btn = b1.button("🚀 Podcast Oluştur", use_container_width=True, type="primary")
             clr_btn = b2.button("🗑️ Temizle",         use_container_width=True)
 
             if clr_btn:
-                for k in ("segs", "audio_segs", "full_audio", "pres_html"):
-                    st.session_state[k] = [] if isinstance(st.session_state[k], list) else None
+                for k in ("segs","audio_segs","full_audio","pres_html"):
+                    st.session_state[k] = ([] if isinstance(
+                        st.session_state.get(k), list) else None)
                 st.session_state.pres_html = ""
-                if "_tpl" in st.session_state:
-                    del st.session_state["_tpl"]
+                if "_tpl" in st.session_state: del st.session_state["_tpl"]
                 st.rerun()
 
             if gen_btn:
+                vm_now = st.session_state.get("voice_map",{})
                 if not script.strip():
                     st.warning("⚠️ Senaryo alanı boş.")
-                elif tts_config.get("engine") == "edge" and not EdgeTTS.available():
-                    st.error("❌ edge-tts kurulu değil → `pip install edge-tts`")
-                elif tts_config.get("engine") == "gtts" and not GTTS.available():
-                    st.error("❌ gtts kurulu değil → `pip install gtts`")
-                elif tts_config.get("engine") == "openai" and not tts_config.get("key"):
-                    st.error("❌ OpenAI API key girilmedi.")
-                elif tts_config.get("engine") == "elevenlabs" and not tts_config.get("key"):
-                    st.error("❌ ElevenLabs API key girilmedi.")
+                elif not vm_now:
+                    st.error("❌ Sol panelden ses dosyanızı yükleyin.")
                 else:
                     parser = ScriptParser()
                     segs   = parser.parse(script)
                     st.session_state.segs = segs
 
-                    asegs = generate_audio(segs, tts_config)
+                    asegs = build_podcast(segs, vm_now)
                     st.session_state.audio_segs = asegs
 
                     combined = b"".join(s["audio"] for s in asegs if s.get("audio"))
-                    st.session_state.full_audio  = combined or None
-                    st.session_state.pres_html   = build_slide_html(segs)
+                    st.session_state.full_audio = combined or None
+
+                    # Sunum HTML'ini oluştur (ses dahil)
+                    audio_b64 = {
+                        ch: audio_to_b64(ab)
+                        for ch, ab in vm_now.items()
+                    }
+                    st.session_state.pres_html = build_slide_html(segs, audio_b64)
                     st.session_state.history.append(
-                        {"preview": script[:55] + "...", "n": len(segs)}
+                        {"preview": script[:55]+"…", "n": len(segs)}
                     )
                     st.rerun()
 
-            # segment audio players
+            # Segment oynatıcı
             if st.session_state.audio_segs:
-                st.markdown('<p class="sct">🎵 Segment Oynatıcı</p>', unsafe_allow_html=True)
+                st.markdown('<p class="sct">🎵 Segmentler</p>', unsafe_allow_html=True)
                 for seg in st.session_state.audio_segs:
-                    label = f"{seg['info']['emoji']} {seg['character']}: {seg['text'][:46]}…"
+                    label = (f"{seg['info']['emoji']} {seg['character']}: "
+                             f"{seg['text'][:48]}…")
                     with st.expander(label, expanded=False):
                         if seg.get("audio"):
                             st.audio(seg["audio"], format="audio/mp3")
                             st.caption(f"⏱️ ~{seg['duration']:.1f} sn")
                         else:
-                            st.caption("⚠️ Ses üretilemedi (voice ID eksik?)")
+                            st.caption("⚠️ Bu segment için ses yok.")
 
                 if st.session_state.full_audio:
                     st.markdown("---")
+                    st.markdown('<p class="sct">🎧 Tam Podcast</p>',
+                                unsafe_allow_html=True)
                     st.audio(st.session_state.full_audio, format="audio/mp3")
                     st.download_button(
-                        "⬇️ Tüm Sesi MP3 İndir",
+                        "⬇️ Podcast MP3 İndir",
                         st.session_state.full_audio,
-                        "podcast.mp3", "audio/mpeg",
+                        "3soru3dakika.mp3", "audio/mpeg",
                         use_container_width=True,
                     )
 
-    # ═══════════════════════════════════════════
-    # TAB 2 — Canlı Sunum
-    # ═══════════════════════════════════════════
+    # ══ TAB 2: Canlı Sunum ════════════════════════════════
     with tab_live:
         if not st.session_state.segs:
-            st.info("ℹ️ Önce **Senaryo & Ses** sekmesinde senaryo girin.")
+            st.info("ℹ️ Senaryo sekmesinde senaryo girin ve podcast oluşturun.")
         else:
             if not st.session_state.pres_html:
-                st.session_state.pres_html = build_slide_html(st.session_state.segs)
+                st.session_state.pres_html = build_slide_html(
+                    st.session_state.segs,
+                    {ch: audio_to_b64(ab)
+                     for ch,ab in st.session_state.get("voice_map",{}).items()}
+                )
 
             st.components.v1.html(
-                st.session_state.pres_html,
-                height=640,
-                scrolling=False,
+                st.session_state.pres_html, height=640, scrolling=False
             )
-
-            st.markdown("---")
             st.caption(
-                "**◀ ▶** ile manuel gezinme · **▶ Oynat** ile otomatik slayt gösterisi · "
-                "Ses ile senkron için aşağıdan başlatın"
+                "**◀ ▶** manuel gezinme · **▶ Oynat** sıralı oynatma · "
+                "Ses yüklendiyse her slayta geçişte otomatik çalar"
             )
-            if st.session_state.full_audio:
-                st.audio(st.session_state.full_audio, format="audio/mp3")
 
-    # ═══════════════════════════════════════════
-    # TAB 3 — MP4 Video
-    # ═══════════════════════════════════════════
+    # ══ TAB 3: Video ══════════════════════════════════════
     with tab_video:
-        st.markdown("### 🎞️ MP4 Video Oluşturucu")
+        st.markdown(
+            '<div style="font-family:serif;font-size:1.5rem;color:#C9A84C;'
+            'margin-bottom:.5rem;">🎞️ MP4 Video Üretici</div>',
+            unsafe_allow_html=True,
+        )
 
         vm = VideoMaker()
-
         if not vm.has_pil:
-            st.error("❌ **Pillow** bulunamadı → `pip install Pillow`")
+            st.error("❌ `pip install Pillow`")
         if not vm.has_imageio:
-            st.error("❌ **imageio[ffmpeg]** bulunamadı → `pip install imageio[ffmpeg]`")
+            st.error("❌ `pip install imageio[ffmpeg]`")
 
         if not st.session_state.audio_segs:
-            st.info("ℹ️ Önce **Senaryo & Ses** sekmesinde sesleri oluşturun.")
+            st.info("ℹ️ Önce Senaryo sekmesinde podcast oluşturun.")
         elif vm.ready():
-            total_dur = sum(s.get("duration", 3.0) for s in st.session_state.audio_segs)
-            total_frm = int(total_dur * VIDEO_FPS)
+            total_dur = sum(s.get("duration",3.0) for s in st.session_state.audio_segs)
             st.info(
                 f"**{len(st.session_state.audio_segs)}** segment · "
-                f"~**{total_dur:.1f} sn** · "
-                f"**{total_frm}** kare @ {VIDEO_FPS} FPS · "
-                f"Çözünürlük: **{VIDEO_W}×{VIDEO_H}**"
+                f"~**{total_dur:.0f} sn** · "
+                f"**{VIDEO_W}×{VIDEO_H}** · **{VIDEO_FPS} FPS**"
+            )
+            st.markdown(
+                "Video her segment için animasyonlu broadcast slaytı render eder: "
+                "karakter adı, rol, orb animasyonu, ses dalgası, typewriter metin ve ses.",
             )
 
             if st.button("🎬 Video Oluştur", type="primary", use_container_width=True):
                 sph = st.empty()
                 pph = st.progress(0)
-
-                def cb(v, m):
-                    pph.progress(min(v, 1.0), m)
+                def cb(v,m):
+                    pph.progress(min(v,1.0), m)
                     sph.markdown(f"⚙️ {m}")
 
-                with st.spinner("Video işleniyor… Bu birkaç dakika sürebilir."):
-                    video_bytes = vm.make(st.session_state.audio_segs, cb)
+                with st.spinner("Video işleniyor… (1–3 dk sürebilir)"):
+                    vbytes = vm.make(st.session_state.audio_segs, cb)
 
-                if video_bytes:
-                    st.success(f"✅ Video hazır! ({len(video_bytes)//1024} KB)")
-                    st.video(video_bytes)
+                if vbytes:
+                    st.success(f"✅ Video hazır! ({len(vbytes)//1024} KB)")
+                    st.video(vbytes)
                     st.download_button(
-                        "⬇️ MP4 İndir",
-                        video_bytes,
-                        "3soru3dakika.mp4",
-                        "video/mp4",
+                        "⬇️ MP4 İndir", vbytes,
+                        "3soru3dakika.mp4", "video/mp4",
                         use_container_width=True,
                     )
                 else:
-                    st.error(
-                        "❌ Video oluşturulamadı. "
-                        "`imageio[ffmpeg]` kurulu mu? "
-                        "`pip install imageio[ffmpeg]` deneyin."
-                    )
+                    st.error("❌ Video oluşturulamadı. `imageio[ffmpeg]` kurulu mu?")
 
-    # ═══════════════════════════════════════════
-    # TAB 4 — PDF
-    # ═══════════════════════════════════════════
+    # ══ TAB 4: PDF ════════════════════════════════════════
     with tab_pdf:
-        st.markdown("### 📄 PDF Slayt İndirici")
-
+        st.markdown(
+            '<div style="font-family:serif;font-size:1.5rem;color:#C9A84C;'
+            'margin-bottom:.5rem;">📄 PDF Slayt Kitapçığı</div>',
+            unsafe_allow_html=True,
+        )
         pm = PDFMaker()
-
         if not pm.ready:
-            st.error("❌ **reportlab** bulunamadı → `pip install reportlab`")
+            st.error("❌ `pip install reportlab`")
         elif not st.session_state.segs:
-            st.info("ℹ️ Önce **Senaryo & Ses** sekmesinde senaryo girin.")
+            st.info("ℹ️ Önce Senaryo sekmesinden senaryo girin.")
         else:
             st.info(
                 f"**{len(st.session_state.segs)}** slayt · "
-                "Yatay A4 (Landscape) · Her slayt bir karakter konuşması"
+                "Broadcast TV tasarımı · Landscape A4 · "
+                "Her slayt: gradient arka plan, orb, konuşma balonu, progress bar"
             )
             if st.button("📄 PDF Oluştur", type="primary", use_container_width=True):
                 with st.spinner("PDF oluşturuluyor…"):
-                    pdf_bytes = pm.make(st.session_state.segs)
-
-                if pdf_bytes:
-                    st.success(f"✅ PDF hazır! ({len(pdf_bytes)//1024} KB)")
+                    pdf = pm.make(st.session_state.segs)
+                if pdf:
+                    st.success(f"✅ PDF hazır! ({len(pdf)//1024} KB)")
                     st.download_button(
-                        "⬇️ PDF İndir",
-                        pdf_bytes,
-                        "3soru3dakika.pdf",
-                        "application/pdf",
+                        "⬇️ PDF İndir", pdf,
+                        "3soru3dakika.pdf", "application/pdf",
                         use_container_width=True,
                     )
                 else:
                     st.error("❌ PDF oluşturulamadı.")
 
-        # history
+        # Geçmiş
         if st.session_state.history:
             st.markdown("---")
             st.markdown('<p class="sct">📜 Geçmiş</p>', unsafe_allow_html=True)
             for h in reversed(st.session_state.history[-5:]):
-                st.markdown(f"🎬 *{h['preview']}* — {h['n']} satır")
+                st.markdown(
+                    f'<div style="font-size:.82rem;color:#667;padding:.2rem 0;">'
+                    f'🎙️ {h["preview"]} — {h["n"]} satır</div>',
+                    unsafe_allow_html=True,
+                )
 
 
 if __name__ == "__main__":
