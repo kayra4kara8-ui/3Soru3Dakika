@@ -393,6 +393,21 @@ class VideoMaker:
             apath = af.name
             af.write(all_audio)
 
+        # Determine ffmpeg binary (system or bundled)
+        ffmpeg_bin = "ffmpeg"
+        try:
+            subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
+        except (FileNotFoundError, OSError):
+            try:
+                import imageio_ffmpeg
+                ffmpeg_bin = imageio_ffmpeg.get_ffmpeg_exe()
+            except Exception:
+                ffmpeg_bin = "ffmpeg"
+
+        # Set IMAGEIO_FFMPEG_EXE for imageio plugin
+        if ffmpeg_bin != "ffmpeg":
+            os.environ["IMAGEIO_FFMPEG_EXE"] = ffmpeg_bin
+
         # Use imageio to write video
         writer = iio.imopen(vpath, "w", plugin="FFMPEG")
         writer.write(frames, fps=VIDEO_FPS, codec="libx264",
@@ -405,7 +420,7 @@ class VideoMaker:
 
         if all_audio and len(all_audio) > 100:
             cmd = [
-                "ffmpeg", "-y",
+                ffmpeg_bin, "-y",
                 "-i", vpath,
                 "-i", apath,
                 "-c:v", "copy",
@@ -415,12 +430,18 @@ class VideoMaker:
                 out
             ]
         else:
-            # No audio — just copy
-            cmd = ["ffmpeg", "-y", "-i", vpath, "-c:v", "copy", out]
+            cmd = [ffmpeg_bin, "-y", "-i", vpath, "-c:v", "copy", out]
 
-        result = subprocess.run(cmd, capture_output=True)
-        os.unlink(vpath)
-        os.unlink(apath)
+        try:
+            result = subprocess.run(cmd, capture_output=True, timeout=300)
+        except (FileNotFoundError, OSError):
+            for f in [vpath, apath]:
+                try: os.unlink(f)
+                except: pass
+            return None
+        for f in [vpath, apath]:
+            try: os.unlink(f)
+            except: pass
 
         if cb: cb(1.0, "Tamamlandı!")
 
@@ -903,9 +924,194 @@ buildPres().catch(e => {{ console.error(e); process.exit(1); }});
 """
 
 
+
 # ══════════════════════════════════════════════════════════════
-# 9. HTML SLIDE BUILDER
+# 8b. PPTX MAKER FALLBACK — python-pptx (Streamlit Cloud uyumlu)
 # ══════════════════════════════════════════════════════════════
+
+class PPTXMakerPython:
+    """python-pptx tabanlı yedek PPTX üretici (Node.js gerektirmez)."""
+
+    def __init__(self):
+        self._ready = False
+        try:
+            from pptx import Presentation
+            from pptx.util import Inches, Pt, Emu
+            from pptx.dml.color import RGBColor
+            from pptx.enum.text import PP_ALIGN
+            self._ready = True
+        except ImportError:
+            pass
+
+    def ready(self): return self._ready
+
+    def make(self, segments: list, **kwargs) -> Optional[bytes]:
+        if not self._ready: return None
+        from pptx import Presentation
+        from pptx.util import Inches, Pt, Emu
+        from pptx.dml.color import RGBColor
+        from pptx.enum.text import PP_ALIGN
+
+        prs = Presentation()
+        prs.slide_width  = Inches(10)
+        prs.slide_height = Inches(5.625)
+        blank_layout = prs.slide_layouts[6]  # completely blank
+
+        W = Inches(10)
+        H = Inches(5.625)
+        total = len(segments)
+
+        def rgb(h):
+            h = h.lstrip("#")
+            return RGBColor(int(h[0:2],16), int(h[2:4],16), int(h[4:6],16))
+
+        def add_rect(slide, x, y, w, h, fill_color, alpha=None):
+            shape = slide.shapes.add_shape(
+                1,  # MSO_SHAPE_TYPE.RECTANGLE
+                Inches(x), Inches(y), Inches(w), Inches(h)
+            )
+            shape.line.fill.background()
+            shape.fill.solid()
+            shape.fill.fore_color.rgb = fill_color
+            return shape
+
+        def add_oval(slide, x, y, w, h, fill_color):
+            from pptx.util import Inches
+            shape = slide.shapes.add_shape(
+                9,  # MSO_SHAPE_TYPE.OVAL
+                Inches(x), Inches(y), Inches(w), Inches(h)
+            )
+            shape.line.fill.background()
+            shape.fill.solid()
+            shape.fill.fore_color.rgb = fill_color
+            return shape
+
+        def add_text(slide, text, x, y, w, h, size, bold=False, color=RGBColor(255,255,255), align="center", italic=False):
+            from pptx.util import Inches, Pt
+            txBox = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
+            tf = txBox.text_frame
+            tf.word_wrap = True
+            p = tf.paragraphs[0]
+            if align == "center":
+                p.alignment = PP_ALIGN.CENTER
+            elif align == "right":
+                p.alignment = PP_ALIGN.RIGHT
+            else:
+                p.alignment = PP_ALIGN.LEFT
+            run = p.add_run()
+            run.text = text
+            run.font.size = Pt(size)
+            run.font.bold = bold
+            run.font.italic = italic
+            run.font.color.rgb = color
+
+        for idx, seg in enumerate(segments):
+            info = seg["info"]
+            col_hex = info["color"].lstrip("#")
+            col_rgb = rgb(info["color"])
+            bg = info["bg_rgb"]
+            dark = info["dark_rgb"]
+
+            slide = prs.slides.add_slide(blank_layout)
+
+            # Gradient background (10 steps)
+            steps = 12
+            for i in range(steps):
+                t = i / steps
+                r_ = int(dark[0]+(bg[0]-dark[0])*t)
+                g_ = int(dark[1]+(bg[1]-dark[1])*t)
+                b_ = int(dark[2]+(bg[2]-dark[2])*t)
+                seg_h = 5.625 / steps
+                add_rect(slide, 0, seg_h*i, 10, seg_h+0.05, RGBColor(r_,g_,b_))
+
+            # Top bar
+            add_rect(slide, 0, 0, 10, 0.55, RGBColor(8,8,18))
+            add_rect(slide, 0, 0.52, 10, 0.05, col_rgb)
+            add_text(slide, "3 SORU · 3 DAKİKA", 0.2, 0.05, 4, 0.45, 12, bold=True, color=col_rgb)
+            add_text(slide, "● YAYIN", 8.8, 0.05, 1, 0.45, 9, bold=True, color=RGBColor(255,64,64), align="right")
+
+            # Orb (circle)
+            orbX, orbY, orbR = 5.0 - 0.75, 2.2 - 0.75, 1.5
+            # Glow rings
+            for gi in range(3, 0, -1):
+                gr = orbR + gi * 0.15
+                gx = 5.0 - gr/2
+                gy = 2.2 - gr/2
+                ov = add_oval(slide, gx, gy, gr, gr, col_rgb)
+                ov.fill.fore_color.theme_color  # just access to not crash
+                # Set transparency via XML
+                try:
+                    from lxml import etree
+                    sp = ov._element
+                    solidFill = sp.find('.//{http://schemas.openxmlformats.org/drawingml/2006/main}solidFill')
+                    if solidFill is not None:
+                        srgb = solidFill.find('{http://schemas.openxmlformats.org/drawingml/2006/main}srgbClr')
+                        if srgb is None:
+                            srgb = etree.SubElement(solidFill, '{http://schemas.openxmlformats.org/drawingml/2006/main}srgbClr')
+                        srgb.set('val', col_hex.upper())
+                        alpha_el = etree.SubElement(srgb, '{http://schemas.openxmlformats.org/drawingml/2006/main}alpha')
+                        alpha_el.set('val', str(int((0.12 - gi*0.03) * 100000)))
+                except: pass
+
+            add_oval(slide, orbX, orbY, orbR, orbR, col_rgb)
+            # Emoji text over orb
+            add_text(slide, info["emoji"], orbX, orbY+0.25, orbR, 0.8, 28, align="center")
+            # Name
+            add_text(slide, seg["character"], 3.0, 3.1, 4.0, 0.45, 18, bold=True, align="center")
+            # Role
+            add_text(slide, info.get("role","").upper(), 3.0, 3.55, 4.0, 0.28, 8, bold=True, color=col_rgb, align="center")
+
+            # Wave bars
+            wave_heights = [0.12, 0.22, 0.18, 0.30, 0.22, 0.30, 0.18, 0.22, 0.12]
+            waveY = 3.93
+            for wi, wh in enumerate(wave_heights):
+                bx = 4.4 + wi * 0.13
+                add_rect(slide, bx, waveY - wh, 0.08, wh, col_rgb)
+
+            # Speech bubble bg
+            add_rect(slide, 0.5, 3.75, 9.0, 1.3, RGBColor(240,240,255))
+
+            # Bubble text
+            full_text = seg["text"]
+            lines = wrap_text(full_text, 90)
+            display = " ".join(lines[:4])
+            fsz = 13 if len(display) > 120 else 14
+            add_text(slide, display, 0.7, 3.85, 8.6, 1.05, fsz, color=RGBColor(24,16,58), align="center")
+
+            # Bottom bar
+            add_rect(slide, 0, 5.235, 10, 0.39, RGBColor(8,8,18))
+            add_rect(slide, 0, 5.235, 10, 0.03, col_rgb)
+            bottom_label = f"{seg['character']}  ·  {info.get('role','')}"
+            add_text(slide, bottom_label, 0.2, 5.24, 5, 0.34, 8, bold=True, color=col_rgb, align="left")
+            add_text(slide, f"{idx+1} / {total}", 8.5, 5.24, 1.3, 0.34, 8, color=RGBColor(170,170,204), align="right")
+
+            # Progress bar
+            prog_w = 10 * (idx+1) / total
+            add_rect(slide, 0, 5.565, 10, 0.06, RGBColor(26,26,46))
+            add_rect(slide, 0, 5.565, prog_w, 0.06, col_rgb)
+
+            # Speaker notes
+            notes_slide = slide.notes_slide
+            notes_tf = notes_slide.notes_text_frame
+            notes_tf.text = f"{seg['character']} ({info.get('role','')}): {seg['text']}"
+
+        buf = io.BytesIO()
+        prs.save(buf)
+        buf.seek(0)
+        return buf.read()
+
+
+def get_pptx_maker():
+    """Returns the best available PPTX maker."""
+    pm = PPTXMaker()
+    if pm.ready():
+        return pm
+    py = PPTXMakerPython()
+    if py.ready():
+        return py
+    return None
+
+
 
 def build_slide_html(segments: list, audio_map: dict = None) -> str:
     data = json.dumps([
@@ -1177,19 +1383,25 @@ def sidebar():
             except ImportError:
                 st.markdown(f"🔴 {name}")
 
-        # Node/pptxgenjs
-        pm = PPTXMaker()
-        if pm.ready():
-            st.markdown("🟢 pptxgenjs (Node.js)")
+        # Node/pptxgenjs or python-pptx
+        pm_check = get_pptx_maker()
+        if pm_check is not None:
+            if isinstance(pm_check, PPTXMaker):
+                st.markdown("🟢 pptxgenjs (Node.js)")
+            else:
+                st.markdown("🟢 python-pptx (yedek)")
         else:
-            st.markdown("🔴 pptxgenjs — `npm i -g pptxgenjs`")
+            st.markdown("🔴 PPTX — `pip install python-pptx`")
 
         # ffmpeg
-        r = subprocess.run(["ffmpeg", "-version"], capture_output=True)
-        if r.returncode == 0:
-            st.markdown("🟢 ffmpeg")
-        else:
-            st.markdown("🔴 ffmpeg")
+        try:
+            r = subprocess.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
+            if r.returncode == 0:
+                st.markdown("🟢 ffmpeg")
+            else:
+                st.markdown("🔴 ffmpeg")
+        except (FileNotFoundError, OSError):
+            st.markdown("🔴 ffmpeg (kurulu değil)")
 
         st.markdown("---")
         st.caption("v5.0 · Kendi Sesin · PPTX + Video + PDF")
@@ -1396,10 +1608,10 @@ def main():
             '📊 PowerPoint Slayt Kitapçığı</div>',
             unsafe_allow_html=True,
         )
-        pm = PPTXMaker()
+        pm = get_pptx_maker()
 
-        if not pm.ready():
-            st.error("❌ pptxgenjs kurulu değil: `npm install -g pptxgenjs`")
+        if pm is None:
+            st.error("❌ PPTX üreticisi bulunamadı. `pip install python-pptx` veya `npm install -g pptxgenjs`")
         elif not st.session_state.segs:
             st.info("ℹ️ Önce Senaryo sekmesinden senaryo girin ve podcast oluşturun.")
         else:
