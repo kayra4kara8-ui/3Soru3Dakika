@@ -1,6 +1,6 @@
 """
 🎙️ 3 Soru 3 Dakika — Profesyonel Podcast & Sunum Stüdyosu
-Kendi sesinizi yükleyin, karakterlere atayın, video ve PDF üretin.
+Kendi sesinizi yükleyin, karakterlere atayın, video ve PDF ve PPTX üretin.
 """
 
 import streamlit as st
@@ -12,6 +12,7 @@ import math
 import tempfile
 import time
 import base64
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -21,39 +22,41 @@ from typing import Optional
 
 CHARACTERS = {
     "Elif": {
-        "color":    "#C9A84C",          # Altın sarısı
+        "color":    "#C9A84C",
         "bg_rgb":   (140, 90, 20),
         "dark_rgb": (40, 22, 5),
         "emoji":    "🎤",
         "role":     "Sunucu",
         "animation": "bounce",
         "avatar_bg": "linear-gradient(135deg,#C9A84C,#8B5E10)",
+        "hex_pptx":  "C9A84C",
     },
     "Ecem": {
-        "color":    "#4C9FCA",          # Açık mavi
+        "color":    "#4C9FCA",
         "bg_rgb":   (20, 80, 140),
         "dark_rgb": (5, 20, 50),
         "emoji":    "👩‍💼",
         "role":     "Konuk",
         "animation": "pulse",
         "avatar_bg": "linear-gradient(135deg,#4C9FCA,#1A4F7A)",
+        "hex_pptx":  "4C9FCA",
     },
     "Eba": {
-        "color":    "#A0C878",          # Yeşil
+        "color":    "#A0C878",
         "bg_rgb":   (50, 110, 40),
         "dark_rgb": (12, 30, 10),
         "emoji":    "🎧",
         "role":     "Dış Ses",
         "animation": "float",
         "avatar_bg": "linear-gradient(135deg,#A0C878,#3D6E20)",
+        "hex_pptx":  "A0C878",
     },
 }
 
-# Yedek renkler (ek karakterler için)
 FALLBACK = [
-    ("#E07B7B", (160,60,60),   (50,15,15)),
-    ("#B57FCC", (130,70,180),  (40,15,60)),
-    ("#7EC8C8", (50,160,160),  (10,55,55)),
+    ("#E07B7B", (160,60,60),   (50,15,15),  "E07B7B"),
+    ("#B57FCC", (130,70,180),  (40,15,60),  "B57FCC"),
+    ("#7EC8C8", (50,160,160),  (10,55,55),  "7EC8C8"),
 ]
 
 TEMPLATES = {
@@ -98,7 +101,7 @@ TEMPLATES = {
     ),
 }
 
-VIDEO_W, VIDEO_H, VIDEO_FPS = 1280, 720, 30
+VIDEO_W, VIDEO_H, VIDEO_FPS = 1280, 720, 24
 
 # ══════════════════════════════════════════════════════════════
 # 2. YARDIMCI
@@ -108,7 +111,7 @@ def hex_to_rgb(h: str) -> tuple:
     h = h.lstrip("#")
     return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
 
-def wrap_text(text: str, max_chars: int) -> list[str]:
+def wrap_text(text: str, max_chars: int) -> list:
     words, lines, line = text.split(), [], ""
     for w in words:
         test = (line + " " + w).strip()
@@ -139,17 +142,18 @@ class ScriptParser:
         if name in CHARACTERS:
             return CHARACTERS[name]
         if name not in self._dyn:
-            hex_c, bg, dark = FALLBACK[self._ci % len(FALLBACK)]
+            hex_c, bg, dark, hp = FALLBACK[self._ci % len(FALLBACK)]
             self._dyn[name] = {
                 "color": hex_c, "bg_rgb": bg, "dark_rgb": dark,
                 "emoji": "🔊", "role": "Konuşmacı",
                 "animation": "pulse",
                 "avatar_bg": f"linear-gradient(135deg,{hex_c},{hex_c}88)",
+                "hex_pptx": hp,
             }
             self._ci += 1
         return self._dyn[name]
 
-    def parse(self, script: str) -> list[dict]:
+    def parse(self, script: str) -> list:
         segs, cur_char, cur_parts = [], None, []
         for raw in script.strip().split("\n"):
             line = raw.strip()
@@ -186,46 +190,23 @@ class ScriptParser:
 
 
 # ══════════════════════════════════════════════════════════════
-# 4. SES YÖNETİMİ — Kendi MP3 sesinizi yükleyin
+# 4. SES YÖNETİMİ
 # ══════════════════════════════════════════════════════════════
 
 class VoiceManager:
-    """
-    Kullanıcının yüklediği MP3 dosyalarını yönetir.
-    Her karakter için ayrı ses atanabilir veya tek ses tüm karakterlere verilebilir.
-    """
-
-    def __init__(self, voice_map: dict[str, bytes]):
-        """voice_map: {karakter_adı: mp3_bytes}"""
-        self.voice_map = voice_map  # {"Elif": b"...", "Ecem": b"...", ...}
+    def __init__(self, voice_map: dict):
+        self.voice_map = voice_map
         self.default   = next(iter(voice_map.values())) if voice_map else None
 
     def get_audio(self, character: str) -> Optional[bytes]:
-        """Karakter için en uygun sesi döner."""
         return self.voice_map.get(character) or self.default
 
     def has_voice(self, character: str) -> bool:
         return character in self.voice_map or self.default is not None
 
 
-def combine_segments(segments_audio: list[bytes], silence_ms: int = 300) -> bytes:
-    """
-    Ses segmentlerini birleştirir.
-    pydub olmadan: MP3 byte'larını doğrudan birleştirir.
-    (Çoğu player bunu sorunsuz oynatır.)
-    """
-    silence = b"\xff\xfb\x90\x00" * (silence_ms * 44)  # ~sessizlik
-    combined = b""
-    for i, audio in enumerate(segments_audio):
-        if audio:
-            combined += audio
-            if i < len(segments_audio) - 1:
-                combined += silence
-    return combined
-
-
 # ══════════════════════════════════════════════════════════════
-# 5. FRAME RENDERER (Pillow) — Broadcast TV estetiği
+# 5. FRAME RENDERER
 # ══════════════════════════════════════════════════════════════
 
 class FrameRenderer:
@@ -257,7 +238,7 @@ class FrameRenderer:
         self._fc[size] = f
         return f
 
-    def render(self, seg: dict, t: float) -> "Image":
+    def render(self, seg: dict, t: float):
         w, h  = VIDEO_W, VIDEO_H
         info  = seg["info"]
         color = hex_to_rgb(info["color"])
@@ -267,7 +248,6 @@ class FrameRenderer:
         img  = self.Image.new("RGB", (w, h))
         draw = self.Draw(img)
 
-        # ── Gradient arka plan ──────────────────────────
         for y in range(h):
             r_t = y / h
             r = int(dark[0] + (bg[0]-dark[0]) * r_t)
@@ -275,27 +255,22 @@ class FrameRenderer:
             b = int(dark[2] + (bg[2]-dark[2]) * r_t)
             draw.line([(0,y),(w,y)], fill=(r,g,b))
 
-        # ── Grid desen (broadcast look) ─────────────────
         for gx in range(0, w, 60):
             draw.line([(gx,0),(gx,h)], fill=(*color,8))
         for gy in range(0, h, 60):
             draw.line([(0,gy),(w,gy)], fill=(*color,8))
 
-        # ── Üst bar (show branding) ─────────────────────
-        draw.rectangle([0, 0, w, 64], fill=(8, 8, 18, 230))
+        draw.rectangle([0, 0, w, 64], fill=(8, 8, 18))
         draw.rectangle([0, 60, w, 64], fill=color)
         fn22 = self._font(22)
         fn18 = self._font(18)
         fn26 = self._font(26)
         fn32 = self._font(32)
         fn14 = self._font(14)
-        draw.text((32, 18), "3 SORU 3 DAKİKA", font=fn22,
-                  fill=(*color, 230), anchor="lm")
+        draw.text((32, 18), "3 SORU 3 DAKİKA", font=fn22, fill=(*color, 230), anchor="lm")
         draw.text((w-32, 18), "● CANLI", font=fn14,
-                  fill=(255, 80, 80, int(200 + 55*math.sin(t*math.pi*4))),
-                  anchor="rm")
+                  fill=(255, 80, 80),anchor="rm")
 
-        # ── Animasyonlu avatar orb ──────────────────────
         anim  = info.get("animation", "pulse")
         cx, cy = w // 2, h // 2 - 65
         orb_r  = 105
@@ -310,57 +285,35 @@ class FrameRenderer:
         elif anim == "shake":
             cx   += int(7  * math.sin(t * math.pi * 6))
 
-        # Glow halkaları
         for gi in range(5, 0, -1):
             gr = orb_r + gi * 18
             ga = max(0, 18 - gi * 3)
             draw.ellipse([cx-gr, cy-gr, cx+gr, cy+gr], fill=(*color, ga))
 
-        # Ana orb
-        draw.ellipse([cx-orb_r, cy-orb_r, cx+orb_r, cy+orb_r],
-                     fill=(*color, 220))
-        # İç highlight
+        draw.ellipse([cx-orb_r, cy-orb_r, cx+orb_r, cy+orb_r], fill=(*color, 220))
         hr = orb_r // 3
-        draw.ellipse([cx-hr, cy-orb_r+14, cx+hr//2, cy-orb_r//2+14],
-                     fill=(255, 255, 255, 50))
+        draw.ellipse([cx-hr, cy-orb_r+14, cx+hr//2, cy-orb_r//2+14], fill=(255, 255, 255, 50))
+        draw.text((cx, cy), info["emoji"], font=self._font(62), fill=(255, 255, 255, 220), anchor="mm")
+        draw.text((cx, cy + orb_r + 28), seg["character"], font=fn32, fill=(255, 255, 255, 230), anchor="mm")
+        draw.text((cx, cy + orb_r + 62), info.get("role", ""), font=fn18, fill=(*color, 180), anchor="mm")
 
-        # Emoji
-        draw.text((cx, cy), info["emoji"], font=self._font(62),
-                  fill=(255, 255, 255, 220), anchor="mm")
-
-        # ── İsim ve rol ─────────────────────────────────
-        draw.text((cx, cy + orb_r + 28), seg["character"],
-                  font=fn32, fill=(255, 255, 255, 230), anchor="mm")
-        draw.text((cx, cy + orb_r + 62), info.get("role", ""),
-                  font=fn18, fill=(*color, 180), anchor="mm")
-
-        # ── Ses dalgası barları ─────────────────────────
         wy = h - 230
         for bi in range(11):
             bh_val = int(10 + 28 * abs(math.sin(t*math.pi*2.5 + bi*0.5)))
             bx = w//2 - 90 + bi * 18
-            draw.rounded_rectangle([bx, wy-bh_val, bx+10, wy],
-                                   radius=4, fill=(*color, 185))
+            draw.rounded_rectangle([bx, wy-bh_val, bx+10, wy], radius=4, fill=(*color, 185))
 
-        # ── Konuşma balonu ──────────────────────────────
         bub_m  = 70
         bub_y  = h - 210
         bub_h  = 170
         bub_x2 = w - bub_m
         bub_y2 = bub_y + bub_h
 
-        # Gölge
-        draw.rounded_rectangle([bub_m+4, bub_y+4, bub_x2+4, bub_y2+4],
-                                radius=20, fill=(0,0,0,70))
-        # Balon
-        draw.rounded_rectangle([bub_m, bub_y, bub_x2, bub_y2],
-                                radius=20, fill=(245,245,255,210),
-                                outline=(*color,190), width=3)
-        # Balon oku
-        draw.polygon([(cx-16, bub_y),(cx+16, bub_y),(cx, bub_y-20)],
-                     fill=(245,245,255,210))
+        draw.rounded_rectangle([bub_m+4, bub_y+4, bub_x2+4, bub_y2+4], radius=20, fill=(0,0,0,70))
+        draw.rounded_rectangle([bub_m, bub_y, bub_x2, bub_y2], radius=20,
+                               fill=(245,245,255,210), outline=(*color,190), width=3)
+        draw.polygon([(cx-16, bub_y),(cx+16, bub_y),(cx, bub_y-20)], fill=(245,245,255,210))
 
-        # Typewriter metni
         full    = seg["text"]
         rev     = int(len(full) * min(1.0, t*2.4 + 0.02))
         partial = full[:rev]
@@ -369,26 +322,20 @@ class FrameRenderer:
 
         ty = bub_y + 24
         for ln in lines[:4]:
-            draw.text((w//2, ty), ln, font=fn22,
-                      fill=(20,18,40,245), anchor="mm")
+            draw.text((w//2, ty), ln, font=fn22, fill=(20,18,40,245), anchor="mm")
             ty += 36
 
-        # ── Alt info bar ────────────────────────────────
-        draw.rectangle([0, h-48, w, h], fill=(8,8,18,220))
+        draw.rectangle([0, h-48, w, h], fill=(8,8,18))
         draw.rectangle([0, h-48, w, h-45], fill=color)
 
         char_n  = seg["character"]
         role_n  = info.get("role","")
-        draw.text((32, h-24), f"{char_n}  ·  {role_n}",
-                  font=fn18, fill=(255,255,255,200), anchor="lm")
+        draw.text((32, h-24), f"{char_n}  ·  {role_n}", font=fn18, fill=(255,255,255,200), anchor="lm")
 
-        # Zaman damgası
         import datetime
         ts = datetime.datetime.now().strftime("%H:%M")
-        draw.text((w-32, h-24), ts, font=fn14,
-                  fill=(*color,180), anchor="rm")
+        draw.text((w-32, h-24), ts, font=fn14, fill=(*color,180), anchor="rm")
 
-        # ── Progress bar ────────────────────────────────
         pw = int(w * t)
         draw.rectangle([0, h-6, pw, h], fill=color)
 
@@ -396,7 +343,7 @@ class FrameRenderer:
 
 
 # ══════════════════════════════════════════════════════════════
-# 6. VIDEO MAKER (imageio)
+# 6. VIDEO MAKER
 # ══════════════════════════════════════════════════════════════
 
 class VideoMaker:
@@ -404,24 +351,26 @@ class VideoMaker:
         self.has_pil     = False
         self.has_imageio = False
         try:
-            from PIL import Image; self.has_pil = True
-        except ImportError: pass
+            from PIL import Image
+            self.has_pil = True
+        except ImportError:
+            pass
         try:
-            import imageio; import imageio.v3; self.has_imageio = True
-        except ImportError: pass
+            import imageio
+            self.has_imageio = True
+        except ImportError:
+            pass
 
     def ready(self): return self.has_pil and self.has_imageio
 
-    def make(self, audio_segs: list[dict], cb=None) -> Optional[bytes]:
+    def make(self, audio_segs: list, cb=None) -> Optional[bytes]:
         import imageio.v3 as iio
         import numpy as np
-        import subprocess, imageio_ffmpeg
 
         renderer  = FrameRenderer()
         all_audio = b""
         frames    = []
-        total_f   = sum(max(VIDEO_FPS, int(s.get("duration",3)*VIDEO_FPS))
-                        for s in audio_segs)
+        total_f   = sum(max(VIDEO_FPS, int(s.get("duration",3)*VIDEO_FPS)) for s in audio_segs)
         done = 0
 
         for seg in audio_segs:
@@ -432,41 +381,59 @@ class VideoMaker:
             for fi in range(n):
                 frames.append(np.array(renderer.render(seg, fi/max(n-1,1))))
                 done += 1
-                if cb and done % 20 == 0:
-                    cb(done/total_f*0.78, f"Kare {done}/{total_f}")
+                if cb and done % 15 == 0:
+                    cb(done/total_f*0.75, f"Kare {done}/{total_f}")
 
-        if cb: cb(0.80, "Video kodlanıyor…")
+        if cb: cb(0.78, "Video kodlanıyor…")
 
+        # Write video frames
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as vf:
             vpath = vf.name
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as af:
             apath = af.name
             af.write(all_audio)
 
-        iio.imwrite(vpath, frames, fps=VIDEO_FPS, codec="libx264",
-                    output_params=["-crf","22","-preset","fast",
-                                   "-pix_fmt","yuv420p"], plugin="FFMPEG")
+        # Use imageio to write video
+        writer = iio.imopen(vpath, "w", plugin="FFMPEG")
+        writer.write(frames, fps=VIDEO_FPS, codec="libx264",
+                     output_params=["-crf", "23", "-preset", "fast", "-pix_fmt", "yuv420p"])
+        writer.close()
 
         if cb: cb(0.90, "Ses ekleniyor…")
 
-        out = vpath.replace(".mp4","_out.mp4")
-        cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-y",
-               "-i", vpath, "-i", apath,
-               "-c:v","copy","-c:a","aac","-b:a","128k",
-               "-shortest", out]
-        subprocess.run(cmd, capture_output=True)
-        os.unlink(vpath); os.unlink(apath)
+        out = vpath.replace(".mp4","_final.mp4")
+
+        if all_audio and len(all_audio) > 100:
+            cmd = [
+                "ffmpeg", "-y",
+                "-i", vpath,
+                "-i", apath,
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-shortest",
+                out
+            ]
+        else:
+            # No audio — just copy
+            cmd = ["ffmpeg", "-y", "-i", vpath, "-c:v", "copy", out]
+
+        result = subprocess.run(cmd, capture_output=True)
+        os.unlink(vpath)
+        os.unlink(apath)
 
         if cb: cb(1.0, "Tamamlandı!")
-        if os.path.exists(out):
-            data = open(out,"rb").read()
-            os.unlink(out)
+
+        target = out if os.path.exists(out) else None
+        if target:
+            data = open(target,"rb").read()
+            os.unlink(target)
             return data
         return None
 
 
 # ══════════════════════════════════════════════════════════════
-# 7. PDF MAKER (reportlab) — Broadcast TV tasarımı
+# 7. PDF MAKER
 # ══════════════════════════════════════════════════════════════
 
 class PDFMaker:
@@ -478,9 +445,10 @@ class PDFMaker:
             self._canvas = rlc
             self._A4L    = landscape(A4)
             self.ready   = True
-        except ImportError: pass
+        except ImportError:
+            pass
 
-    def make(self, segments: list[dict]) -> Optional[bytes]:
+    def make(self, segments: list) -> Optional[bytes]:
         if not self.ready: return None
         buf = io.BytesIO()
         W, H = self._A4L
@@ -491,9 +459,7 @@ class PDFMaker:
             color = hex_to_rgb(info["color"])
             bg    = info["bg_rgb"]
             dark  = info["dark_rgb"]
-            hex_c = info["color"]
 
-            # Gradient bg
             steps = 50
             for i in range(steps):
                 t = i / steps
@@ -503,7 +469,6 @@ class PDFMaker:
                 c.setFillColorRGB(r_/255, g_/255, b_/255)
                 c.rect(0, H-H/steps*(i+1), W, H/steps+1, fill=1, stroke=0)
 
-            # Üst bar
             c.setFillColorRGB(0.03, 0.03, 0.07)
             c.rect(0, H-50, W, 50, fill=1, stroke=0)
             c.setFillColorRGB(*[x/255 for x in color])
@@ -515,15 +480,6 @@ class PDFMaker:
             c.setFillColorRGB(1, 0.3, 0.3)
             c.drawRightString(W-24, H-34, "● YAYIN")
 
-            # Grid çizgileri (hafif)
-            c.setStrokeColorRGB(*[x/255 for x in color])
-            c.setLineWidth(0.3)
-            for gx in range(0, int(W), 55):
-                c.setStrokeAlpha(0.07)
-                c.line(gx, 0, gx, H-54)
-            c.setStrokeAlpha(1)
-
-            # Orb (daire)
             orb_x, orb_y, orb_r = W*0.5, H*0.58, 65
             for ring in range(4,0,-1):
                 rr = orb_r + ring*14
@@ -533,15 +489,13 @@ class PDFMaker:
             c.setFillColorRGB(*[x/255 for x in color])
             c.setFillAlpha(0.88)
             c.circle(orb_x, orb_y, orb_r, fill=1, stroke=0)
+
             c.setFillColorRGB(1,1,1); c.setFillAlpha(0.18)
             c.circle(orb_x-orb_r*0.28, orb_y+orb_r*0.32, orb_r*0.26, fill=1, stroke=0)
-
-            # Emoji
             c.setFillColorRGB(1,1,1); c.setFillAlpha(1)
             c.setFont("Helvetica-Bold", 36)
             c.drawCentredString(orb_x, orb_y-12, info.get("emoji",""))
 
-            # İsim + Rol
             c.setFont("Helvetica-Bold", 22)
             c.setFillColorRGB(1,1,1)
             c.drawCentredString(orb_x, orb_y-orb_r-26, seg["character"])
@@ -549,7 +503,6 @@ class PDFMaker:
             c.setFillColorRGB(*[x/255 for x in color])
             c.drawCentredString(orb_x, orb_y-orb_r-46, info.get("role",""))
 
-            # Ses dalgası barları
             bar_y = orb_y - orb_r - 65
             for bi in range(9):
                 bh = 8 + (bi%3+1)*5
@@ -558,7 +511,6 @@ class PDFMaker:
                 c.setFillAlpha(0.7)
                 c.roundRect(bx, bar_y-bh, 10, bh, 3, fill=1, stroke=0)
 
-            # Konuşma balonu
             bub_m  = 45
             bub_h_pt = 130
             bub_y_pt = 38
@@ -570,7 +522,6 @@ class PDFMaker:
             c.setStrokeAlpha(0.7); c.setLineWidth(2)
             c.roundRect(bub_m, bub_y_pt, bub_w_pt, bub_h_pt, 14, fill=0, stroke=1)
 
-            # Balon ok (path ile)
             tip_x  = W/2
             tip_yb = bub_y_pt + bub_h_pt
             c.setFillColorRGB(0.96,0.96,1); c.setFillAlpha(0.93)
@@ -581,7 +532,6 @@ class PDFMaker:
             p.close()
             c.drawPath(p, fill=1, stroke=0)
 
-            # Metin
             c.setFillAlpha(1); c.setFillColorRGB(0.1,0.08,0.18)
             text  = seg["text"]
             lines = wrap_text(text, 75)
@@ -593,7 +543,6 @@ class PDFMaker:
                 c.drawCentredString(W/2, ty, ln)
                 ty -= lh
 
-            # Alt bar
             c.setFillColorRGB(0.03,0.03,0.07); c.setFillAlpha(1)
             c.rect(0, 0, W, 38, fill=1, stroke=0)
             c.setFillColorRGB(*[x/255 for x in color])
@@ -604,10 +553,8 @@ class PDFMaker:
             c.setFillColorRGB(1,1,1)
             c.drawRightString(W-24, 14, f"{idx+1} / {len(segments)}")
 
-            # Progress bar
             c.setFillColorRGB(*[x/255 for x in color]); c.setFillAlpha(0.9)
             c.rect(0, 0, W*(idx+1)/len(segments), 5, fill=1, stroke=0)
-
             c.showPage()
 
         c.save()
@@ -616,13 +563,351 @@ class PDFMaker:
 
 
 # ══════════════════════════════════════════════════════════════
-# 8. HTML SLAYT MOTORU — Broadcast estetiği
+# 8. PPTX MAKER — pptxgenjs ile profesyonel slayt
 # ══════════════════════════════════════════════════════════════
 
-def build_slide_html(segments: list[dict], audio_map: dict[str, str] = None) -> str:
-    """
-    audio_map: {karakter: base64_mp3} — ses varsa otomatik oynatır
-    """
+class PPTXMaker:
+    def __init__(self):
+        self.node_ok = False
+        try:
+            result = subprocess.run(["node", "--version"], capture_output=True, text=True)
+            if result.returncode == 0:
+                # Check pptxgenjs
+                check = subprocess.run(
+                    ["node", "-e", "require('pptxgenjs'); console.log('ok')"],
+                    capture_output=True, text=True
+                )
+                self.node_ok = "ok" in check.stdout
+        except:
+            pass
+
+    def ready(self): return self.node_ok
+
+    def make(self, segments: list, voice_map: dict = None, audio_segs: list = None) -> Optional[bytes]:
+        """
+        Creates professional PPTX with:
+        - Dark gradient backgrounds per character color
+        - Character orb, name, role
+        - Speech bubble with text
+        - Wave bars
+        - Progress bar
+        - Speaker notes with full text
+        - Audio notes (timing info)
+        """
+        # Build slide data
+        slide_data = []
+        for i, seg in enumerate(segments):
+            info = seg["info"]
+            color_hex = info.get("hex_pptx", info["color"].lstrip("#"))
+            bg = info["bg_rgb"]
+            dark = info["dark_rgb"]
+
+            # Compute timing
+            duration = 3.0
+            if audio_segs:
+                for as_ in audio_segs:
+                    if as_["character"] == seg["character"]:
+                        duration = as_.get("duration", 3.0)
+                        break
+
+            slide_data.append({
+                "idx": i,
+                "total": len(segments),
+                "char": seg["character"],
+                "text": seg["text"],
+                "emoji": info["emoji"],
+                "role": info.get("role", ""),
+                "color": color_hex,
+                "bg_r": bg[0], "bg_g": bg[1], "bg_b": bg[2],
+                "dark_r": dark[0], "dark_g": dark[1], "dark_b": dark[2],
+                "duration": duration,
+            })
+
+        # Write JS script
+        js = self._build_js(slide_data)
+        js_path = tempfile.mktemp(suffix=".js")
+        out_path = tempfile.mktemp(suffix=".pptx")
+
+        with open(js_path, "w", encoding="utf-8") as f:
+            f.write(js)
+
+        result = subprocess.run(
+            ["node", js_path, out_path],
+            capture_output=True, text=True, timeout=60
+        )
+
+        os.unlink(js_path)
+
+        if result.returncode != 0 or not os.path.exists(out_path):
+            return None
+
+        data = open(out_path, "rb").read()
+        os.unlink(out_path)
+        return data
+
+    def _build_js(self, slides: list) -> str:
+        slides_json = json.dumps(slides, ensure_ascii=False)
+        return f"""
+const pptxgen = require('pptxgenjs');
+const path = require('path');
+
+const outPath = process.argv[2] || 'output.pptx';
+const slides = {slides_json};
+
+function hexToRgb(h) {{
+  const r = parseInt(h.slice(0,2), 16);
+  const g = parseInt(h.slice(2,4), 16);
+  const b = parseInt(h.slice(4,6), 16);
+  return {{ r, g, b }};
+}}
+
+function rgbToHex(r, g, b) {{
+  return [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('').toUpperCase();
+}}
+
+function wrapText(text, maxChars) {{
+  const words = text.split(' ');
+  const lines = [];
+  let line = '';
+  for (const w of words) {{
+    const test = line ? line + ' ' + w : w;
+    if (test.length <= maxChars) {{
+      line = test;
+    }} else {{
+      if (line) lines.push(line);
+      line = w;
+    }}
+  }}
+  if (line) lines.push(line);
+  return lines;
+}}
+
+async function buildPres() {{
+  const pres = new pptxgen();
+  pres.layout = 'LAYOUT_16x9';
+  pres.title = '3 Soru 3 Dakika';
+  pres.author = 'Studio';
+
+  const W = 10, H = 5.625;
+
+  for (const s of slides) {{
+    const slide = pres.addSlide();
+
+    // ── Gradient background via stacked rectangles ──
+    const steps = 30;
+    for (let i = 0; i < steps; i++) {{
+      const t = i / steps;
+      const r = Math.round(s.dark_r + (s.bg_r - s.dark_r) * t);
+      const g = Math.round(s.dark_g + (s.bg_g - s.dark_g) * t);
+      const b = Math.round(s.dark_b + (s.bg_b - s.dark_b) * t);
+      slide.addShape(pres.shapes.RECTANGLE, {{
+        x: 0, y: (H / steps) * i,
+        w: W, h: (H / steps) + 0.02,
+        fill: {{ color: rgbToHex(r, g, b) }},
+        line: {{ color: rgbToHex(r, g, b), width: 0 }},
+      }});
+    }}
+
+    // ── Grid lines (subtle) ──
+    const gridColor = s.color;
+    for (let gx = 0; gx < W; gx += 0.65) {{
+      slide.addShape(pres.shapes.LINE, {{
+        x: gx, y: 0, w: 0, h: H,
+        line: {{ color: gridColor, width: 0.3, transparency: 92 }}
+      }});
+    }}
+
+    // ── Top bar ──
+    slide.addShape(pres.shapes.RECTANGLE, {{
+      x: 0, y: 0, w: W, h: 0.55,
+      fill: {{ color: '080812' }},
+      line: {{ color: '080812', width: 0 }}
+    }});
+    // Gold accent line under top bar
+    slide.addShape(pres.shapes.RECTANGLE, {{
+      x: 0, y: 0.52, w: W, h: 0.05,
+      fill: {{ color: s.color }},
+      line: {{ color: s.color, width: 0 }}
+    }});
+    // Show title
+    slide.addText('3 SORU · 3 DAKİKA', {{
+      x: 0.2, y: 0.05, w: 4, h: 0.45,
+      fontSize: 14, bold: true, color: s.color,
+      charSpacing: 2, valign: 'middle', margin: 0
+    }});
+    // Live badge
+    slide.addText('● YAYIN', {{
+      x: W - 1.2, y: 0.05, w: 1, h: 0.45,
+      fontSize: 10, bold: true, color: 'FF4040',
+      charSpacing: 1, align: 'right', valign: 'middle', margin: 0
+    }});
+
+    // ── Character orb (circle) ──
+    const orbX = W / 2, orbY = 2.2, orbR = 0.75;
+    // Glow rings
+    for (let gi = 3; gi >= 1; gi--) {{
+      const gr = orbR + gi * 0.12;
+      slide.addShape(pres.shapes.OVAL, {{
+        x: orbX - gr, y: orbY - gr, w: gr * 2, h: gr * 2,
+        fill: {{ color: s.color, transparency: 80 + gi * 6 }},
+        line: {{ color: s.color, width: 0 }}
+      }});
+    }}
+    // Main orb fill
+    slide.addShape(pres.shapes.OVAL, {{
+      x: orbX - orbR, y: orbY - orbR, w: orbR * 2, h: orbR * 2,
+      fill: {{ color: s.color }},
+      line: {{ color: s.color, width: 0 }},
+      shadow: {{ type: 'outer', color: s.color, blur: 20, offset: 4, angle: 135, opacity: 0.4 }}
+    }});
+    // Highlight (top-left shine)
+    const hlR = 0.22;
+    slide.addShape(pres.shapes.OVAL, {{
+      x: orbX - orbR + 0.15, y: orbY - orbR + 0.12, w: hlR * 2, h: hlR,
+      fill: {{ color: 'FFFFFF', transparency: 60 }},
+      line: {{ color: 'FFFFFF', width: 0 }}
+    }});
+    // Emoji inside orb
+    slide.addText(s.emoji, {{
+      x: orbX - orbR, y: orbY - orbR + 0.18, w: orbR * 2, h: orbR * 1.2,
+      fontSize: 34, align: 'center', valign: 'middle', margin: 0
+    }});
+
+    // ── Character name ──
+    slide.addText(s.char, {{
+      x: orbX - 2, y: orbY + orbR + 0.1, w: 4, h: 0.4,
+      fontSize: 20, bold: true, color: 'FFFFFF',
+      align: 'center', valign: 'middle',
+      fontFace: 'Georgia', margin: 0
+    }});
+    // Role
+    slide.addText(s.role.toUpperCase(), {{
+      x: orbX - 2, y: orbY + orbR + 0.52, w: 4, h: 0.28,
+      fontSize: 9, bold: true, color: s.color,
+      charSpacing: 2, align: 'center', valign: 'middle', margin: 0
+    }});
+
+    // ── Wave bars ──
+    const waveY = orbY + orbR + 0.88;
+    const waveBarCount = 9;
+    const waveBarW = 0.07;
+    const waveBarGap = 0.055;
+    const waveTotal = waveBarCount * (waveBarW + waveBarGap);
+    const waveStartX = orbX - waveTotal / 2;
+    const waveHeights = [0.12, 0.22, 0.18, 0.30, 0.22, 0.30, 0.18, 0.22, 0.12];
+    for (let wi = 0; wi < waveBarCount; wi++) {{
+      const bh = waveHeights[wi];
+      slide.addShape(pres.shapes.ROUNDED_RECTANGLE, {{
+        x: waveStartX + wi * (waveBarW + waveBarGap),
+        y: waveY - bh,
+        w: waveBarW, h: bh,
+        fill: {{ color: s.color, transparency: 25 }},
+        line: {{ color: s.color, width: 0 }},
+        rectRadius: 0.02
+      }});
+    }}
+
+    // ── Speech bubble ──
+    const bubX = 0.5, bubY = 3.75, bubW = W - 1.0, bubH = 1.3;
+    // Shadow
+    slide.addShape(pres.shapes.ROUNDED_RECTANGLE, {{
+      x: bubX + 0.04, y: bubY + 0.04, w: bubW, h: bubH,
+      fill: {{ color: '000000', transparency: 70 }},
+      line: {{ color: '000000', width: 0 }},
+      rectRadius: 0.15
+    }});
+    // Main bubble
+    slide.addShape(pres.shapes.ROUNDED_RECTANGLE, {{
+      x: bubX, y: bubY, w: bubW, h: bubH,
+      fill: {{ color: 'F5F5FF', transparency: 10 }},
+      line: {{ color: s.color, width: 1.5 }},
+      rectRadius: 0.15
+    }});
+    // Bubble pointer (triangle pointing up to orb)
+    slide.addShape(pres.shapes.ISOCELES_TRIANGLE, {{
+      x: W / 2 - 0.12, y: bubY - 0.15, w: 0.24, h: 0.18,
+      fill: {{ color: 'F5F5FF', transparency: 10 }},
+      line: {{ color: s.color, width: 0 }},
+      rotate: 180
+    }});
+
+    // Bubble text
+    const lines = wrapText(s.text, 85);
+    const lineCount = Math.min(lines.length, 4);
+    const fontSize = lineCount <= 2 ? 14 : lineCount <= 3 ? 12 : 11;
+    const lineH = fontSize * 0.018;
+    const totalTextH = lineCount * lineH + (lineCount - 1) * 0.04;
+    const textStartY = bubY + (bubH - totalTextH) / 2;
+
+    const textRuns = [];
+    for (let li = 0; li < lineCount; li++) {{
+      textRuns.push({{
+        text: lines[li],
+        options: {{
+          breakLine: li < lineCount - 1,
+          fontSize: fontSize,
+          color: '18103A',
+        }}
+      }});
+    }}
+    slide.addText(textRuns, {{
+      x: bubX + 0.2, y: bubY + 0.12, w: bubW - 0.4, h: bubH - 0.24,
+      align: 'center', valign: 'middle',
+      fontFace: 'Calibri',
+    }});
+
+    // ── Bottom bar ──
+    slide.addShape(pres.shapes.RECTANGLE, {{
+      x: 0, y: H - 0.38, w: W, h: 0.38,
+      fill: {{ color: '080812' }},
+      line: {{ color: '080812', width: 0 }}
+    }});
+    slide.addShape(pres.shapes.RECTANGLE, {{
+      x: 0, y: H - 0.38, w: W, h: 0.03,
+      fill: {{ color: s.color }},
+      line: {{ color: s.color, width: 0 }}
+    }});
+    slide.addText(`${{s.char}}  ·  ${{s.role}}`, {{
+      x: 0.2, y: H - 0.36, w: 5, h: 0.34,
+      fontSize: 9, bold: true, color: s.color,
+      charSpacing: 1, valign: 'middle', margin: 0
+    }});
+    slide.addText(`${{s.idx + 1}} / ${{s.total}}`, {{
+      x: W - 1.3, y: H - 0.36, w: 1.1, h: 0.34,
+      fontSize: 9, color: 'AAAACC', align: 'right', valign: 'middle', margin: 0
+    }});
+
+    // ── Progress bar ──
+    const progressW = W * (s.idx + 1) / s.total;
+    slide.addShape(pres.shapes.RECTANGLE, {{
+      x: 0, y: H - 0.06, w: W, h: 0.06,
+      fill: {{ color: '1a1a2e' }},
+      line: {{ color: '1a1a2e', width: 0 }}
+    }});
+    slide.addShape(pres.shapes.RECTANGLE, {{
+      x: 0, y: H - 0.06, w: progressW, h: 0.06,
+      fill: {{ color: s.color }},
+      line: {{ color: s.color, width: 0 }}
+    }});
+
+    // ── Speaker notes ──
+    const noteText = `${{s.char}} (${{s.role}}): ${{s.text}}\\n\\nSüre: ~${{Math.round(s.duration)}} saniye`;
+    slide.addNotes(noteText);
+  }}
+
+  await pres.writeFile({{ fileName: outPath }});
+  console.log('PPTX written to', outPath);
+}}
+
+buildPres().catch(e => {{ console.error(e); process.exit(1); }});
+"""
+
+
+# ══════════════════════════════════════════════════════════════
+# 9. HTML SLIDE BUILDER
+# ══════════════════════════════════════════════════════════════
+
+def build_slide_html(segments: list, audio_map: dict = None) -> str:
     data = json.dumps([
         {
             "char":  s["character"],
@@ -647,43 +932,25 @@ def build_slide_html(segments: list[dict], audio_map: dict[str, str] = None) -> 
 :root{--gold:#C9A84C;--blue:#4C9FCA;--green:#A0C878;}
 *{margin:0;padding:0;box-sizing:border-box;}
 body{font-family:'DM Sans',sans-serif;background:#06060f;color:#eee;height:100vh;overflow:hidden;display:flex;flex-direction:column;}
-
-/* Top bar */
-#topbar{height:52px;flex-shrink:0;background:rgba(6,6,18,.95);display:flex;align-items:center;justify-content:space-between;padding:0 24px;border-bottom:2px solid var(--gold);}
+#topbar{height:52px;flex-shrink:0;background:rgba(6,6,18,.97);display:flex;align-items:center;justify-content:space-between;padding:0 24px;border-bottom:2px solid var(--gold);}
 #show-title{font-family:'DM Serif Display',serif;font-size:16px;letter-spacing:.12em;color:var(--gold);}
 #live-dot{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:#ff5050;letter-spacing:.1em;}
 #live-dot span{width:8px;height:8px;border-radius:50%;background:#ff5050;animation:livepulse 1.2s ease-in-out infinite;}
 @keyframes livepulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)}}
-
-/* Progress */
 #prog{height:3px;flex-shrink:0;background:rgba(255,255,255,.08);}
 #pfill{height:100%;width:0%;transition:width .5s ease;}
-
-/* Stage */
 #stage{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px 32px;position:relative;transition:background .7s ease;}
-
-/* Grid overlay */
 #stage::before{content:'';position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);background-size:55px 55px;pointer-events:none;}
-
-/* Orb */
 .orb{width:130px;height:130px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:56px;position:relative;margin-bottom:8px;}
 .orb::after{content:'';position:absolute;top:16px;left:24px;width:34px;height:16px;border-radius:50%;background:rgba(255,255,255,.22);transform:rotate(-20deg);}
-
-/* Name & role */
 .char-name{font-family:'DM Serif Display',serif;font-size:22px;letter-spacing:.06em;margin-bottom:4px;}
 .char-role{font-size:11px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;opacity:.7;margin-bottom:18px;}
-
-/* Waves */
 .waves{display:flex;gap:4px;align-items:flex-end;height:32px;margin-bottom:16px;}
 .wb{width:7px;border-radius:4px;animation:wb .5s ease-in-out infinite;}
 @keyframes wb{0%,100%{transform:scaleY(.25)}50%{transform:scaleY(1)}}
-
-/* Bubble */
 .bubble{background:rgba(248,248,255,.11);backdrop-filter:blur(20px);border-radius:20px;padding:20px 32px;max-width:700px;width:100%;text-align:center;font-size:17px;line-height:1.75;border:1.5px solid rgba(255,255,255,.13);box-shadow:0 16px 60px rgba(0,0,0,.5);position:relative;}
 .bubble::before{content:'';position:absolute;top:-13px;left:50%;transform:translateX(-50%);border:13px solid transparent;border-bottom-color:rgba(248,248,255,.11);}
 #btext{display:inline-block;}
-
-/* Controls */
 #ctrl{display:flex;gap:8px;align-items:center;justify-content:center;padding:12px;background:rgba(6,6,18,.85);border-top:1px solid rgba(255,255,255,.07);flex-shrink:0;}
 button{padding:8px 18px;border:none;border-radius:7px;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:700;letter-spacing:.05em;transition:all .18s;}
 #bprev{background:rgba(255,255,255,.09);color:#fff;}
@@ -691,30 +958,23 @@ button{padding:8px 18px;border:none;border-radius:7px;cursor:pointer;font-family
 #bplay{background:#1a3f6e;color:#fff;}
 button:hover{transform:translateY(-2px);filter:brightness(1.2);}
 #cnt{color:rgba(255,255,255,.35);font-size:12px;min-width:48px;text-align:center;font-variant-numeric:tabular-nums;}
-
-/* Bottom bar */
 #botbar{height:38px;flex-shrink:0;background:rgba(6,6,18,.95);display:flex;align-items:center;justify-content:space-between;padding:0 24px;border-top:2px solid rgba(255,255,255,.07);}
 #char-info{font-size:12px;font-weight:600;letter-spacing:.08em;}
 #slide-no{font-size:11px;color:rgba(255,255,255,.35);font-variant-numeric:tabular-nums;}
-
-/* Animations */
 @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-18px)}}
 @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
 @keyframes float{0%,100%{transform:translateY(-9px) rotate(-3deg)}50%{transform:translateY(9px) rotate(3deg)}}
 @keyframes shake{0%,100%{transform:rotate(0)}25%{transform:rotate(-6deg)}75%{transform:rotate(6deg)}}
 @keyframes slideUp{from{opacity:0;transform:translateY(28px)}to{opacity:1;transform:translateY(0)}}
-@keyframes typeText{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
 .in{animation:slideUp .42s ease both;}
 </style>
 </head>
 <body>
-
 <div id="topbar">
   <div id="show-title">3 SORU · 3 DAKİKA</div>
   <div id="live-dot"><span></span>YAYIN</div>
 </div>
 <div id="prog"><div id="pfill"></div></div>
-
 <div id="stage">
   <div class="orb" id="orb">🎤</div>
   <div class="char-name" id="cname">—</div>
@@ -722,54 +982,41 @@ button:hover{transform:translateY(-2px);filter:brightness(1.2);}
   <div class="waves" id="waves"></div>
   <div class="bubble"><span id="btext"></span></div>
 </div>
-
 <div id="ctrl">
   <button id="bprev" onclick="go(-1)">◀ Geri</button>
   <span id="cnt">1/1</span>
   <button id="bplay" onclick="togglePlay()">▶ Oynat</button>
   <button id="bnext" onclick="go(1)">İleri ▶</button>
 </div>
-
 <div id="botbar">
   <div id="char-info" style="color:#fff"></div>
   <div id="slide-no">0/0</div>
 </div>
-
 <audio id="player" style="display:none"></audio>
-
 <script>
 const SLIDES = __SLIDES_DATA__;
 let cur=0,playing=false,timer=null;
-
 function rgb(a){return `rgb(${a[0]},${a[1]},${a[2]})`;}
 function grad(bg,dark){return `linear-gradient(160deg,${rgb(dark)} 0%,${rgb(bg)} 100%)`;}
-
 function render(i){
   const s=SLIDES[i];
   const stage=document.getElementById('stage');
   stage.style.background=grad(s.bg,s.dark);
-
   const orb=document.getElementById('orb');
   orb.textContent=s.emoji;
   orb.style.background=`radial-gradient(circle at 35% 38%,${s.color}cc,${s.color}33)`;
   orb.style.boxShadow=`0 0 55px ${s.color}44,0 0 20px ${s.color}22`;
   orb.style.animation='none'; void orb.offsetWidth;
   orb.style.animation=s.anim+' .85s ease-in-out infinite';
-
   document.getElementById('cname').textContent=s.char;
   document.getElementById('cname').style.color=s.color;
   document.getElementById('crole').textContent=s.role;
   document.getElementById('crole').style.color=s.color;
-
   const bub=document.querySelector('.bubble');
   bub.style.borderColor=s.color+'33';
   bub.style.boxShadow=`0 16px 60px ${s.color}20`;
-
   const bt=document.getElementById('btext');
   bt.textContent=s.text;
-  bt.style.animation='none'; void bt.offsetWidth;
-  bt.style.animation='typeText 1.8s steps(70,end) forwards';
-
   const wv=document.getElementById('waves');
   wv.innerHTML='';
   for(let j=0;j<11;j++){
@@ -781,7 +1028,6 @@ function render(i){
     b.style.animationDuration=(.32+Math.random()*.42)+'s';
     wv.appendChild(b);
   }
-
   stage.className='in';
   document.getElementById('pfill').style.width=((i+1)/SLIDES.length*100)+'%';
   document.getElementById('pfill').style.background=s.color;
@@ -789,162 +1035,75 @@ function render(i){
   document.getElementById('char-info').textContent=s.char+' · '+s.role;
   document.getElementById('char-info').style.color=s.color;
   document.getElementById('slide-no').textContent=(i+1)+' / '+SLIDES.length;
-
-  // Otomatik ses oynat
   if(s.audio){
     const player=document.getElementById('player');
     player.src='data:audio/mp3;base64,'+s.audio;
     player.play().catch(()=>{});
   }
 }
-
 function go(d){cur=(cur+d+SLIDES.length)%SLIDES.length;render(cur);}
-
 function togglePlay(){
   playing=!playing;
   document.getElementById('bplay').textContent=playing?'⏸ Durdur':'▶ Oynat';
-  if(playing)loop(); else clearTimeout(timer);
+  if(playing)loop(); else {clearTimeout(timer); const p=document.getElementById('player'); p.pause();}
 }
-
 function loop(){
   if(!playing)return;
   const s=SLIDES[cur];
-  const dur=s.audio?0:4500;
   if(s.audio){
     const player=document.getElementById('player');
-    player.onended=()=>{go(1);loop();};
+    player.onended=()=>{if(playing){go(1);if(cur===0){playing=false;document.getElementById('bplay').textContent='▶ Oynat';}else{loop();}}};
   } else {
-    timer=setTimeout(()=>{go(1);loop();},dur);
+    timer=setTimeout(()=>{if(playing){go(1);loop();}},4500);
   }
 }
-
 if(SLIDES.length>0)render(0);
 </script>
 </body>
 </html>"""
-
     return html.replace("__SLIDES_DATA__", data)
 
 
 # ══════════════════════════════════════════════════════════════
-# 9. CSS — Broadcast Editorial
+# 10. CSS
 # ══════════════════════════════════════════════════════════════
 
 CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;600;700&family=JetBrains+Mono:wght@400&display=swap');
-
-:root {
-  --gold:   #C9A84C;
-  --blue:   #4C9FCA;
-  --green:  #A0C878;
-  --bg:     #06060f;
-  --surface:#0e0e1e;
-}
-
-html,body,[class*="css"] { font-family:'DM Sans',sans-serif; }
-
-.stApp {
-  background: radial-gradient(ellipse at 20% 50%, #0d1a2e 0%, #06060f 60%);
-  color: #e8e8f0;
-}
-
-/* Sidebar */
-section[data-testid="stSidebar"] {
-  background: rgba(6,6,18,.97);
-  border-right: 1px solid rgba(201,168,76,.15);
-}
-
-/* Header */
-.hdr {
-  text-align:center;
-  padding: 1.4rem 1rem .8rem;
-  border-bottom: 1px solid rgba(201,168,76,.15);
-  margin-bottom: 1rem;
-}
-.hdr h1 {
-  font-family: 'DM Serif Display', serif;
-  font-size: 2.4rem;
-  font-weight: 400;
-  letter-spacing: .05em;
-  background: linear-gradient(90deg,#C9A84C,#f0d080,#C9A84C);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  margin-bottom: .2rem;
-}
-.hdr p { color: #667; font-size: .82rem; letter-spacing: .1em; text-transform: uppercase; }
-
-/* Segment cards */
-.sc {
-  border-radius: 10px;
-  padding: .8rem 1rem;
-  margin: .4rem 0;
-  border-left: 3px solid;
-  background: rgba(255,255,255,.03);
-  transition: transform .13s, background .13s;
-}
-.sc:hover { transform: translateX(5px); background: rgba(255,255,255,.06); }
-.sc-c { font-size:.66rem; font-weight:700; letter-spacing:.14em; text-transform:uppercase; margin-bottom:.25rem; }
-.sc-t { font-size:.88rem; line-height:1.6; color:#bbc; }
-
-/* Stats */
-.sr {
-  display:flex; gap:1rem; padding:.6rem .9rem;
-  background:rgba(201,168,76,.07); border-radius:8px;
-  margin:.5rem 0; font-size:.77rem; color:#888;
-  border: 1px solid rgba(201,168,76,.15);
-}
-.sr strong { color: var(--gold,#C9A84C); }
-
-/* Badges */
-.bdg {
-  display:inline-flex; align-items:center; gap:.3rem;
-  padding:.24rem .62rem; border-radius:50px;
-  font-size:.7rem; font-weight:700; margin:.15rem;
-}
-.bok { background:rgba(160,200,120,.1); color:#A0C878; border:1px solid rgba(160,200,120,.25); }
-.bwn { background:rgba(220,80,80,.1);   color:#E07B7B; border:1px solid rgba(220,80,80,.25);   }
-
-.sct {
-  font-size:.63rem; letter-spacing:.16em;
-  text-transform:uppercase; color:#445;
-  margin:.7rem 0 .32rem;
-}
-
-/* Voice upload area */
-.upload-zone {
-  border: 1.5px dashed rgba(201,168,76,.35);
-  border-radius: 12px;
-  padding: 1.2rem;
-  margin: .5rem 0;
-  background: rgba(201,168,76,.04);
-  text-align: center;
-}
-
-audio { width:100%; border-radius:7px; margin:3px 0; }
-textarea {
-  background:rgba(255,255,255,.04)!important;
-  border-radius:10px!important;
-  color:#eee!important;
-  font-family:'JetBrains Mono',monospace!important;
-  font-size:.82rem!important;
-  border: 1px solid rgba(201,168,76,.15)!important;
-}
-hr { border-color:rgba(255,255,255,.06); }
-.stProgress>div>div { border-radius:10px; }
+:root{--gold:#C9A84C;--blue:#4C9FCA;--green:#A0C878;--bg:#06060f;--surface:#0e0e1e;}
+html,body,[class*="css"]{font-family:'DM Sans',sans-serif;}
+.stApp{background:radial-gradient(ellipse at 20% 50%,#0d1a2e 0%,#06060f 60%);color:#e8e8f0;}
+section[data-testid="stSidebar"]{background:rgba(6,6,18,.97);border-right:1px solid rgba(201,168,76,.15);}
+.hdr{text-align:center;padding:1.4rem 1rem .8rem;border-bottom:1px solid rgba(201,168,76,.15);margin-bottom:1rem;}
+.hdr h1{font-family:'DM Serif Display',serif;font-size:2.4rem;font-weight:400;letter-spacing:.05em;background:linear-gradient(90deg,#C9A84C,#f0d080,#C9A84C);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:.2rem;}
+.hdr p{color:#667;font-size:.82rem;letter-spacing:.1em;text-transform:uppercase;}
+.sc{border-radius:10px;padding:.8rem 1rem;margin:.4rem 0;border-left:3px solid;background:rgba(255,255,255,.03);transition:transform .13s,background .13s;}
+.sc:hover{transform:translateX(5px);background:rgba(255,255,255,.06);}
+.sc-c{font-size:.66rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;margin-bottom:.25rem;}
+.sc-t{font-size:.88rem;line-height:1.6;color:#bbc;}
+.sr{display:flex;gap:1rem;padding:.6rem .9rem;background:rgba(201,168,76,.07);border-radius:8px;margin:.5rem 0;font-size:.77rem;color:#888;border:1px solid rgba(201,168,76,.15);}
+.sr strong{color:var(--gold,#C9A84C);}
+.bdg{display:inline-flex;align-items:center;gap:.3rem;padding:.24rem .62rem;border-radius:50px;font-size:.7rem;font-weight:700;margin:.15rem;}
+.bok{background:rgba(160,200,120,.1);color:#A0C878;border:1px solid rgba(160,200,120,.25);}
+.bwn{background:rgba(220,80,80,.1);color:#E07B7B;border:1px solid rgba(220,80,80,.25);}
+.sct{font-size:.63rem;letter-spacing:.16em;text-transform:uppercase;color:#445;margin:.7rem 0 .32rem;}
+audio{width:100%;border-radius:7px;margin:3px 0;}
+textarea{background:rgba(255,255,255,.04)!important;border-radius:10px!important;color:#eee!important;font-family:'JetBrains Mono',monospace!important;font-size:.82rem!important;border:1px solid rgba(201,168,76,.15)!important;}
+hr{border-color:rgba(255,255,255,.06);}
+.stProgress>div>div{border-radius:10px;}
 </style>
 """
 
-
 # ══════════════════════════════════════════════════════════════
-# 10. STATE
+# 11. STATE
 # ══════════════════════════════════════════════════════════════
 
 def init_state():
     defaults = dict(
         segs=[], audio_segs=[], full_audio=None,
         pres_html="", history=[], voice_map={},
+        video_bytes=None, pptx_bytes=None,
     )
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -952,7 +1111,7 @@ def init_state():
 
 
 # ══════════════════════════════════════════════════════════════
-# 11. SIDEBAR — Ses Yükleme
+# 12. SIDEBAR
 # ══════════════════════════════════════════════════════════════
 
 def sidebar():
@@ -966,13 +1125,10 @@ def sidebar():
         )
         st.markdown("---")
 
-        # ── Ses Yükleme ──────────────────────────────────
         st.markdown('<p class="sct">🎤 Kendi Sesinizi Yükleyin</p>', unsafe_allow_html=True)
         st.caption("Her karaktere farklı ses atayabilir veya hepsine aynı sesi verebilirsiniz.")
 
         voice_map = {}
-
-        # Tek genel ses seçeneği
         use_single = st.checkbox("Hepsi için tek ses kullan", value=True)
 
         if use_single:
@@ -1011,31 +1167,41 @@ def sidebar():
 
         st.markdown("---")
 
-        # ── Bağımlılık durumu ─────────────────────────────
+        # Kütüphane durumu
         st.markdown('<p class="sct">📦 Kütüphaneler</p>', unsafe_allow_html=True)
-        for lib, name in [("PIL","Pillow"),("imageio","imageio[ffmpeg]"),
-                          ("reportlab","reportlab")]:
+        libs = [("PIL","Pillow"),("imageio","imageio"),("reportlab","reportlab")]
+        for lib, name in libs:
             try:
                 __import__(lib)
                 st.markdown(f"🟢 {name}")
             except ImportError:
                 st.markdown(f"🔴 {name}")
 
+        # Node/pptxgenjs
+        pm = PPTXMaker()
+        if pm.ready():
+            st.markdown("🟢 pptxgenjs (Node.js)")
+        else:
+            st.markdown("🔴 pptxgenjs — `npm i -g pptxgenjs`")
+
+        # ffmpeg
+        r = subprocess.run(["ffmpeg", "-version"], capture_output=True)
+        if r.returncode == 0:
+            st.markdown("🟢 ffmpeg")
+        else:
+            st.markdown("🔴 ffmpeg")
+
         st.markdown("---")
-        st.caption("v4.0 · Kendi Sesin · Broadcast Tasarım")
+        st.caption("v5.0 · Kendi Sesin · PPTX + Video + PDF")
 
     return st.session_state.get("voice_map", {})
 
 
 # ══════════════════════════════════════════════════════════════
-# 12. PODCAST OLUŞTURMA — Kendi sesini kullan
+# 13. PODCAST BUILD
 # ══════════════════════════════════════════════════════════════
 
-def build_podcast(segs: list[dict], voice_map: dict) -> list[dict]:
-    """
-    Her segmente karşılık gelen sesi atar.
-    Ses atanmışsa doğrudan kullanır; atanmamışsa None bırakır.
-    """
+def build_podcast(segs: list, voice_map: dict) -> list:
     vm    = VoiceManager(voice_map)
     out   = []
     n     = len(segs)
@@ -1044,24 +1210,19 @@ def build_podcast(segs: list[dict], voice_map: dict) -> list[dict]:
 
     for i, seg in enumerate(segs):
         ch    = seg["character"]
-        ph.markdown(
-            f'🎙️ **{seg["info"]["emoji"]} {ch}** hazırlanıyor… ({i+1}/{n})'
-        )
+        ph.markdown(f'🎙️ **{seg["info"]["emoji"]} {ch}** hazırlanıyor… ({i+1}/{n})')
         audio = vm.get_audio(ch)
         dur   = mp3_duration(audio) if audio else 3.0
-
-        # Gerçek bir podcast'te her satır aynı ses dosyasından gelir.
-        # Burası gelecekte TTS ile değiştirilebilir.
         out.append({**seg, "audio": audio, "duration": dur})
         pb.progress((i+1)/n, f"{i+1}/{n}")
-        time.sleep(0.05)
+        time.sleep(0.04)
 
     ph.success(f"✅ {n} segment hazır!")
     return out
 
 
 # ══════════════════════════════════════════════════════════════
-# 13. MAIN
+# 14. MAIN
 # ══════════════════════════════════════════════════════════════
 
 def main():
@@ -1075,17 +1236,14 @@ def main():
     init_state()
     voice_map = sidebar()
 
-    # Header
     st.markdown(
-        '<div class="hdr">'
-        '<h1>3 Soru · 3 Dakika</h1>'
-        '<p>Profesyonel Podcast &amp; Sunum Stüdyosu</p>'
-        '</div>',
+        '<div class="hdr"><h1>3 Soru · 3 Dakika</h1>'
+        '<p>Profesyonel Podcast &amp; Sunum Stüdyosu</p></div>',
         unsafe_allow_html=True,
     )
 
-    tab_script, tab_live, tab_video, tab_pdf = st.tabs(
-        ["✏️ Senaryo", "🖥️ Canlı Sunum", "🎞️ Video", "📄 PDF"]
+    tab_script, tab_live, tab_pptx, tab_video, tab_pdf = st.tabs(
+        ["✏️ Senaryo", "🖥️ Canlı Sunum", "📊 PowerPoint", "🎞️ Video", "📄 PDF"]
     )
 
     # ══ TAB 1: Senaryo ════════════════════════════════════
@@ -1093,7 +1251,6 @@ def main():
         col_l, col_r = st.columns([1,1], gap="large")
 
         with col_l:
-            # Şablonlar
             st.markdown('<p class="sct">📂 Hazır Şablonlar</p>', unsafe_allow_html=True)
             tc = st.columns(3)
             for idx, (lbl, content) in enumerate(TEMPLATES.items()):
@@ -1104,7 +1261,7 @@ def main():
             script = st.text_area(
                 "Senaryo",
                 value=st.session_state.get("_tpl",""),
-                height=400,
+                height=380,
                 placeholder="Elif: Merhaba!\nEcem: Hoş geldiniz!\nEba: Bugünün konusu…",
                 label_visibility="collapsed",
             )
@@ -1126,7 +1283,6 @@ def main():
                 )
                 st.session_state.segs = segs
 
-            # Ses durumu
             st.markdown('<p class="sct">🔊 Ses Durumu</p>', unsafe_allow_html=True)
             vm_now = st.session_state.get("voice_map",{})
             badges = ""
@@ -1154,14 +1310,14 @@ def main():
             st.markdown("---")
             b1, b2 = st.columns(2)
             gen_btn = b1.button("🚀 Podcast Oluştur", use_container_width=True, type="primary")
-            clr_btn = b2.button("🗑️ Temizle",         use_container_width=True)
+            clr_btn = b2.button("🗑️ Temizle", use_container_width=True)
 
             if clr_btn:
-                for k in ("segs","audio_segs","full_audio","pres_html"):
-                    st.session_state[k] = ([] if isinstance(
-                        st.session_state.get(k), list) else None)
+                for k in ("segs","audio_segs","full_audio","pres_html","video_bytes","pptx_bytes"):
+                    st.session_state[k] = [] if isinstance(st.session_state.get(k), list) else None
                 st.session_state.pres_html = ""
-                if "_tpl" in st.session_state: del st.session_state["_tpl"]
+                if "_tpl" in st.session_state:
+                    del st.session_state["_tpl"]
                 st.rerun()
 
             if gen_btn:
@@ -1181,23 +1337,23 @@ def main():
                     combined = b"".join(s["audio"] for s in asegs if s.get("audio"))
                     st.session_state.full_audio = combined or None
 
-                    # Sunum HTML'ini oluştur (ses dahil)
-                    audio_b64 = {
-                        ch: audio_to_b64(ab)
-                        for ch, ab in vm_now.items()
-                    }
+                    audio_b64 = {ch: audio_to_b64(ab) for ch, ab in vm_now.items()}
                     st.session_state.pres_html = build_slide_html(segs, audio_b64)
+
+                    # Reset generated files so they're regenerated fresh
+                    st.session_state.video_bytes = None
+                    st.session_state.pptx_bytes  = None
+
                     st.session_state.history.append(
                         {"preview": script[:55]+"…", "n": len(segs)}
                     )
                     st.rerun()
 
-            # Segment oynatıcı
+            # Segment player
             if st.session_state.audio_segs:
                 st.markdown('<p class="sct">🎵 Segmentler</p>', unsafe_allow_html=True)
                 for seg in st.session_state.audio_segs:
-                    label = (f"{seg['info']['emoji']} {seg['character']}: "
-                             f"{seg['text'][:48]}…")
+                    label = f"{seg['info']['emoji']} {seg['character']}: {seg['text'][:48]}…"
                     with st.expander(label, expanded=False):
                         if seg.get("audio"):
                             st.audio(seg["audio"], format="audio/mp3")
@@ -1207,13 +1363,13 @@ def main():
 
                 if st.session_state.full_audio:
                     st.markdown("---")
-                    st.markdown('<p class="sct">🎧 Tam Podcast</p>',
-                                unsafe_allow_html=True)
+                    st.markdown('<p class="sct">🎧 Tam Podcast</p>', unsafe_allow_html=True)
                     st.audio(st.session_state.full_audio, format="audio/mp3")
                     st.download_button(
                         "⬇️ Podcast MP3 İndir",
-                        st.session_state.full_audio,
-                        "3soru3dakika.mp3", "audio/mpeg",
+                        data=st.session_state.full_audio,
+                        file_name="3soru3dakika.mp3",
+                        mime="audio/mpeg",
                         use_container_width=True,
                     )
 
@@ -1223,25 +1379,88 @@ def main():
             st.info("ℹ️ Senaryo sekmesinde senaryo girin ve podcast oluşturun.")
         else:
             if not st.session_state.pres_html:
-                st.session_state.pres_html = build_slide_html(
-                    st.session_state.segs,
-                    {ch: audio_to_b64(ab)
-                     for ch,ab in st.session_state.get("voice_map",{}).items()}
-                )
+                vm_now = st.session_state.get("voice_map",{})
+                audio_b64 = {ch: audio_to_b64(ab) for ch, ab in vm_now.items()}
+                st.session_state.pres_html = build_slide_html(st.session_state.segs, audio_b64)
 
-            st.components.v1.html(
-                st.session_state.pres_html, height=640, scrolling=False
-            )
+            st.components.v1.html(st.session_state.pres_html, height=640, scrolling=False)
             st.caption(
-                "**◀ ▶** manuel gezinme · **▶ Oynat** sıralı oynatma · "
+                "**◀ ▶** manuel gezinme · **▶ Oynat** sıralı otomatik oynatma · "
                 "Ses yüklendiyse her slayta geçişte otomatik çalar"
             )
 
-    # ══ TAB 3: Video ══════════════════════════════════════
+    # ══ TAB 3: PowerPoint ════════════════════════════════
+    with tab_pptx:
+        st.markdown(
+            '<div style="font-family:serif;font-size:1.5rem;color:#C9A84C;margin-bottom:.5rem;">'
+            '📊 PowerPoint Slayt Kitapçığı</div>',
+            unsafe_allow_html=True,
+        )
+        pm = PPTXMaker()
+
+        if not pm.ready():
+            st.error("❌ pptxgenjs kurulu değil: `npm install -g pptxgenjs`")
+        elif not st.session_state.segs:
+            st.info("ℹ️ Önce Senaryo sekmesinden senaryo girin ve podcast oluşturun.")
+        else:
+            n_seg = len(st.session_state.segs)
+            st.info(
+                f"**{n_seg}** slayt · Broadcast tasarım · 16:9 · "
+                "Her slayt: gradient arka plan, karakter orb, konuşma balonu, "
+                "dalga barları, ilerleme çubuğu · Konuşmacı notları dahil"
+            )
+
+            col1, col2 = st.columns([2,1])
+            with col1:
+                gen_pptx = st.button("📊 PPTX Oluştur", type="primary", use_container_width=True)
+            with col2:
+                regen = st.button("🔄 Yeniden Oluştur", use_container_width=True)
+
+            if regen:
+                st.session_state.pptx_bytes = None
+                st.rerun()
+
+            if gen_pptx or (st.session_state.pptx_bytes is None and st.session_state.segs):
+                if gen_pptx:
+                    with st.spinner("PPTX oluşturuluyor…"):
+                        pptx = pm.make(
+                            st.session_state.segs,
+                            voice_map=st.session_state.get("voice_map",{}),
+                            audio_segs=st.session_state.audio_segs or None,
+                        )
+                    if pptx:
+                        st.session_state.pptx_bytes = pptx
+                        st.success(f"✅ PPTX hazır! ({len(pptx)//1024} KB)")
+                    else:
+                        st.error("❌ PPTX oluşturulamadı.")
+
+            if st.session_state.pptx_bytes:
+                st.success(f"✅ PPTX hazır — {len(st.session_state.pptx_bytes)//1024} KB")
+                st.download_button(
+                    label="⬇️ PowerPoint İndir (.pptx)",
+                    data=st.session_state.pptx_bytes,
+                    file_name="3soru3dakika.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    use_container_width=True,
+                    type="primary",
+                )
+                st.markdown("---")
+                st.markdown("**📌 PPTX İçeriği:**")
+                for i, seg in enumerate(st.session_state.segs):
+                    c = seg["info"]["color"]
+                    st.markdown(
+                        f'<div class="sc" style="border-color:{c};">'
+                        f'<div class="sc-c" style="color:{c};">'
+                        f'Slayt {i+1} · {seg["info"]["emoji"]} {seg["character"]} · {seg["info"]["role"]}</div>'
+                        f'<div class="sc-t">{seg["text"][:100]}{"…" if len(seg["text"])>100 else ""}</div></div>',
+                        unsafe_allow_html=True,
+                    )
+
+    # ══ TAB 4: Video ══════════════════════════════════════
     with tab_video:
         st.markdown(
-            '<div style="font-family:serif;font-size:1.5rem;color:#C9A84C;'
-            'margin-bottom:.5rem;">🎞️ MP4 Video Üretici</div>',
+            '<div style="font-family:serif;font-size:1.5rem;color:#C9A84C;margin-bottom:.5rem;">'
+            '🎞️ MP4 Video Üretici</div>',
             unsafe_allow_html=True,
         )
 
@@ -1260,64 +1479,90 @@ def main():
                 f"~**{total_dur:.0f} sn** · "
                 f"**{VIDEO_W}×{VIDEO_H}** · **{VIDEO_FPS} FPS**"
             )
-            st.markdown(
-                "Video her segment için animasyonlu broadcast slaytı render eder: "
-                "karakter adı, rol, orb animasyonu, ses dalgası, typewriter metin ve ses.",
-            )
 
-            if st.button("🎬 Video Oluştur", type="primary", use_container_width=True):
+            col1, col2 = st.columns([2,1])
+            with col1:
+                make_video = st.button("🎬 Video Oluştur", type="primary", use_container_width=True)
+            with col2:
+                regen_v = st.button("🔄 Yeniden", use_container_width=True)
+
+            if regen_v:
+                st.session_state.video_bytes = None
+                st.rerun()
+
+            if make_video:
                 sph = st.empty()
                 pph = st.progress(0)
-                def cb(v,m):
-                    pph.progress(min(v,1.0), m)
+                def cb(v, m):
+                    pph.progress(min(float(v), 1.0), m)
                     sph.markdown(f"⚙️ {m}")
 
                 with st.spinner("Video işleniyor… (1–3 dk sürebilir)"):
                     vbytes = vm.make(st.session_state.audio_segs, cb)
 
                 if vbytes:
+                    st.session_state.video_bytes = vbytes
                     st.success(f"✅ Video hazır! ({len(vbytes)//1024} KB)")
-                    st.video(vbytes)
-                    st.download_button(
-                        "⬇️ MP4 İndir", vbytes,
-                        "3soru3dakika.mp4", "video/mp4",
-                        use_container_width=True,
-                    )
                 else:
-                    st.error("❌ Video oluşturulamadı. `imageio[ffmpeg]` kurulu mu?")
+                    st.error("❌ Video oluşturulamadı.")
 
-    # ══ TAB 4: PDF ════════════════════════════════════════
+            # Show video + download if available
+            if st.session_state.video_bytes:
+                vb = st.session_state.video_bytes
+                st.success(f"✅ Video hazır — {len(vb)//1024} KB")
+                st.video(vb)
+                # Streamlit download button for video
+                st.download_button(
+                    label="⬇️ MP4 Video İndir",
+                    data=vb,
+                    file_name="3soru3dakika.mp4",
+                    mime="video/mp4",
+                    use_container_width=True,
+                    type="primary",
+                )
+                # Also provide base64 link as fallback
+                b64v = base64.b64encode(vb).decode()
+                st.markdown(
+                    f'<a href="data:video/mp4;base64,{b64v}" download="3soru3dakika.mp4" '
+                    f'style="display:inline-block;padding:8px 20px;background:#1a6e3a;'
+                    f'color:#fff;border-radius:8px;font-weight:700;font-size:13px;'
+                    f'text-decoration:none;margin-top:6px;">📥 Alternatif İndir Linki</a>',
+                    unsafe_allow_html=True,
+                )
+
+    # ══ TAB 5: PDF ════════════════════════════════════════
     with tab_pdf:
         st.markdown(
-            '<div style="font-family:serif;font-size:1.5rem;color:#C9A84C;'
-            'margin-bottom:.5rem;">📄 PDF Slayt Kitapçığı</div>',
+            '<div style="font-family:serif;font-size:1.5rem;color:#C9A84C;margin-bottom:.5rem;">'
+            '📄 PDF Slayt Kitapçığı</div>',
             unsafe_allow_html=True,
         )
-        pm = PDFMaker()
-        if not pm.ready:
+        pmaker = PDFMaker()
+        if not pmaker.ready:
             st.error("❌ `pip install reportlab`")
         elif not st.session_state.segs:
             st.info("ℹ️ Önce Senaryo sekmesinden senaryo girin.")
         else:
             st.info(
                 f"**{len(st.session_state.segs)}** slayt · "
-                "Broadcast TV tasarımı · Landscape A4 · "
-                "Her slayt: gradient arka plan, orb, konuşma balonu, progress bar"
+                "Broadcast TV tasarımı · Landscape A4"
             )
             if st.button("📄 PDF Oluştur", type="primary", use_container_width=True):
                 with st.spinner("PDF oluşturuluyor…"):
-                    pdf = pm.make(st.session_state.segs)
+                    pdf = pmaker.make(st.session_state.segs)
                 if pdf:
                     st.success(f"✅ PDF hazır! ({len(pdf)//1024} KB)")
                     st.download_button(
-                        "⬇️ PDF İndir", pdf,
-                        "3soru3dakika.pdf", "application/pdf",
+                        label="⬇️ PDF İndir",
+                        data=pdf,
+                        file_name="3soru3dakika.pdf",
+                        mime="application/pdf",
                         use_container_width=True,
+                        type="primary",
                     )
                 else:
                     st.error("❌ PDF oluşturulamadı.")
 
-        # Geçmiş
         if st.session_state.history:
             st.markdown("---")
             st.markdown('<p class="sct">📜 Geçmiş</p>', unsafe_allow_html=True)
