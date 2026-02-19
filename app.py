@@ -31,7 +31,7 @@ except ImportError:
     PIL_OK = False
 
 try:
-    import imageio.v3 as iio
+    import imageio  # noqa — kept for dependency check
     IMAGEIO_OK = True
 except ImportError:
     IMAGEIO_OK = False
@@ -357,16 +357,29 @@ def build_video(
     tmp_audio = os.path.join(work_dir, "concat_audio.aac")
     tmp_out   = os.path.join(work_dir, "output.mp4")
 
-    # ── 1. Video stream (ses yok) ───────────────────────────────────────────
+    # ── 1. Video stream — ffmpeg stdin pipe (RAM'de kare biriktirme yok) ───
     if cb:
         cb(0.05, "Video kareleri işleniyor...")
 
-    writer = iio.get_writer(
+    ffmpeg_cmd = [
+        FFMPEG, "-y",
+        "-f", "rawvideo",
+        "-vcodec", "rawvideo",
+        "-s", f"{VIDEO_W}x{VIDEO_H}",
+        "-pix_fmt", "rgb24",
+        "-r", str(VIDEO_FPS),
+        "-i", "pipe:0",
+        "-vcodec", "libx264",
+        "-crf", "22",
+        "-preset", "fast",
+        "-pix_fmt", "yuv420p",
         tmp_video,
-        fps=VIDEO_FPS,
-        codec="libx264",
-        output_params=["-crf", "22", "-preset", "fast", "-pix_fmt", "yuv420p"],
-        plugin="FFMPEG",
+    ]
+    proc = subprocess.Popen(
+        ffmpeg_cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     try:
         for idx, (img, aud_path, dur) in enumerate(zip(slide_images, audio_paths, durations)):
@@ -375,13 +388,18 @@ def build_video(
             for fi in range(nf):
                 t = fi / max(nf - 1, 1)
                 frame = render_frame(img, idx, n, t, has_audio)
-                writer.append_data(frame)
+                proc.stdin.write(frame.astype(np.uint8).tobytes())
                 done_frames += 1
                 if cb and done_frames % 12 == 0:
                     pct = 0.05 + 0.60 * (done_frames / total_frames)
                     cb(pct, f"Kare {done_frames} / {total_frames} — Slayt {idx+1}/{n}")
-    finally:
-        writer.close()
+        proc.stdin.close()
+        proc.wait(timeout=600)
+        if proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg video encode başarısız (kod {proc.returncode})")
+    except Exception as e:
+        proc.kill()
+        raise RuntimeError(f"[Video stream] Kare yazma hatası: {e}")
 
     if cb:
         cb(0.68, "Ses segmentleri birleştiriliyor (ffmpeg concat)...")
