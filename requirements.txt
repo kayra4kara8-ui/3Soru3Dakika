@@ -1,5 +1,5 @@
 streamlit
 Pillow
+imageio[ffmpeg]
 python-pptx
 numpy
-imageio
