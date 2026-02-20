@@ -1,5 +1,5 @@
 """
-PPTX + Ses → Senkronize MP4 | v8.0 | Dinamik Karakter Yönetimi
+PPTX + Ses → Senkronize MP4 | v8.1 | Dinamik Karakter Yönetimi
 ──────────────────────────────────────────────────────────────
 • Varsayılan karakter: Elif (tek kişi, her şeyi o anlatır)
 • İstediğiniz kadar konuşmacı ekleyip çıkarabilirsiniz
@@ -9,34 +9,45 @@ PPTX + Ses → Senkronize MP4 | v8.0 | Dinamik Karakter Yönetimi
 • ffmpeg concat ile milisaniye hassasiyetinde ses birleştirme
 • Stream render: RAM'de kare biriktirme yok
 """
-
 import streamlit as st
 import io, os, math, base64, tempfile, subprocess, shutil, json, time
 import numpy as np
 
 # ── ffmpeg ────────────────────────────────────────────────────────────────────
 def _get_ffmpeg():
+    # 1. imageio_ffmpeg (en güvenilir yol — kendi binary'sini barındırır)
     try:
         import imageio_ffmpeg
-        return imageio_ffmpeg.get_ffmpeg_exe()
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and os.path.exists(exe):
+            return exe
     except Exception:
-        return shutil.which("ffmpeg") or "ffmpeg"
+        pass
+    # 2. PATH'te ffmpeg
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    # 3. Yaygın sabit konumlar
+    for p in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/opt/homebrew/bin/ffmpeg"]:
+        if os.path.exists(p):
+            return p
+    # 4. Bulunamadı — None döndür, kontrol build_video'da yapılır
+    return None
 
 FFMPEG = _get_ffmpeg()
-os.environ["IMAGEIO_FFMPEG_EXE"] = FFMPEG
+if FFMPEG:
+    os.environ["IMAGEIO_FFMPEG_EXE"] = FFMPEG
 
 try:
     from PIL import Image, ImageDraw, ImageFont
     PIL_OK = True
 except ImportError:
     PIL_OK = False
-
 try:
     import imageio  # noqa
     IMAGEIO_OK = True
 except ImportError:
     IMAGEIO_OK = False
-
 try:
     from pptx import Presentation
     PPTX_OK = True
@@ -46,9 +57,9 @@ except ImportError:
 LO_BIN = "/usr/bin/libreoffice" if os.path.exists("/usr/bin/libreoffice") else "/usr/bin/soffice"
 LO_OK  = os.path.exists(LO_BIN)
 PPM_OK = os.path.exists("/usr/bin/pdftoppm")
+FFMPEG_OK = FFMPEG is not None
 
 VIDEO_W, VIDEO_H, VIDEO_FPS = 1280, 720, 24
-
 FONT_PATHS = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
@@ -72,11 +83,9 @@ DEFAULT_CHARACTERS = [
     {"name": "Elif", "role": "Sunucu", **PALETTE[0]}
 ]
 
-
 # ═════════════════════════════════════════════════════════════════════════════
 # YARDIMCILAR
 # ═════════════════════════════════════════════════════════════════════════════
-
 def _font(size):
     if not PIL_OK:
         return None
@@ -87,7 +96,6 @@ def _font(size):
             except Exception:
                 pass
     return ImageFont.load_default()
-
 
 def _run(cmd, timeout=900, step_name=""):
     try:
@@ -106,11 +114,18 @@ def _run(cmd, timeout=900, step_name=""):
             f"CMD: {' '.join(str(c) for c in cmd)}"
         )
 
-
 def _ffprobe_path():
-    ffprobe = FFMPEG.replace("ffmpeg", "ffprobe")
-    return ffprobe if os.path.exists(ffprobe) else "ffprobe"
-
+    if FFMPEG:
+        ffprobe = FFMPEG.replace("ffmpeg", "ffprobe")
+        if os.path.exists(ffprobe):
+            return ffprobe
+    found = shutil.which("ffprobe")
+    if found:
+        return found
+    for p in ["/usr/bin/ffprobe", "/usr/local/bin/ffprobe"]:
+        if os.path.exists(p):
+            return p
+    return "ffprobe"
 
 def audio_duration_ffprobe(audio_path: str) -> float:
     try:
@@ -124,7 +139,6 @@ def audio_duration_ffprobe(audio_path: str) -> float:
     except Exception:
         size = os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
         return max(1.0, size / 16_000)
-
 
 def audio_duration_sec_bytes(data: bytes) -> float:
     if not data:
@@ -140,18 +154,15 @@ def audio_duration_sec_bytes(data: bytes) -> float:
         except Exception:
             pass
 
-
 # ═════════════════════════════════════════════════════════════════════════════
 # PPTX → GÖRÜNTÜLER
 # ═════════════════════════════════════════════════════════════════════════════
-
 def pptx_to_images(pptx_bytes: bytes) -> list:
     tmp = tempfile.mkdtemp(prefix="pptx2img_")
     try:
         pptx_path = os.path.join(tmp, "presentation.pptx")
         with open(pptx_path, "wb") as f:
             f.write(pptx_bytes)
-
         try:
             _run(
                 [LO_BIN, "--headless", "--convert-to", "pdf",
@@ -163,12 +174,10 @@ def pptx_to_images(pptx_bytes: bytes) -> list:
                 f"LibreOffice PDF dönüşümü başarısız.\n"
                 f"packages.txt içinde 'libreoffice' satırı var mı?\n\n{e}"
             )
-
         pdfs = [f for f in os.listdir(tmp) if f.endswith(".pdf")]
         if not pdfs:
             raise RuntimeError("LibreOffice çalıştı ama PDF üretmedi.")
         pdf_path = os.path.join(tmp, pdfs[0])
-
         img_prefix = os.path.join(tmp, "slide")
         try:
             _run(
@@ -179,7 +188,6 @@ def pptx_to_images(pptx_bytes: bytes) -> list:
             raise RuntimeError(
                 f"pdftoppm başarısız.\npackages.txt içinde 'poppler-utils' var mı?\n\n{e}"
             )
-
         files = sorted([
             os.path.join(tmp, f)
             for f in os.listdir(tmp)
@@ -187,14 +195,12 @@ def pptx_to_images(pptx_bytes: bytes) -> list:
         ])
         if not files:
             raise RuntimeError("pdftoppm çalıştı ama görüntü üretmedi.")
-
         return [
             Image.open(p).convert("RGB").resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
             for p in files
         ]
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-
 
 def read_pptx_notes(pptx_bytes: bytes) -> list:
     prs = Presentation(io.BytesIO(pptx_bytes))
@@ -208,11 +214,9 @@ def read_pptx_notes(pptx_bytes: bytes) -> list:
         notes.append(txt)
     return notes
 
-
 # ═════════════════════════════════════════════════════════════════════════════
 # SES HAZIRLAMA
 # ═════════════════════════════════════════════════════════════════════════════
-
 def prepare_audio_segments(
     slide_audio_map: dict,   # {slide_idx: bytes}
     durations: dict,         # {slide_idx: float}
@@ -223,15 +227,12 @@ def prepare_audio_segments(
 ) -> tuple[list, list]:
     audio_paths = []
     dur_list    = []
-
     if use_global and global_audio:
         global_path = os.path.join(work_dir, "global_audio.audio")
         with open(global_path, "wb") as f:
             f.write(global_audio)
-
         total_dur = audio_duration_ffprobe(global_path)
         per_slide = total_dur / max(n_slides, 1)
-
         for i in range(n_slides):
             start_sec = i * per_slide
             seg_path  = os.path.join(work_dir, f"seg_{i:04d}.aac")
@@ -270,25 +271,15 @@ def prepare_audio_segments(
             else:
                 audio_paths.append(None)
                 dur_list.append(durations.get(i, 3.0))
-
     return audio_paths, dur_list
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # KARE RENDER — Karakter bilgisi + slide overlay
 # ═════════════════════════════════════════════════════════════════════════════
-
 def render_frame(slide_img, slide_idx, total, t, speaker: dict, has_audio: bool):
-    """
-    slide_img üzerine broadcast overlay ekler:
-    - Üst şerit: program adı + konuşmacı
-    - Alt şerit: progress bar + slayt numarası + ses animasyonu
-    - Konuşmacı rengi accent olarak kullanılır
-    """
     frame = slide_img.copy()
     draw  = ImageDraw.Draw(frame)
     w, h  = frame.size
-
     color = speaker.get("rgb", (201, 168, 76))
     name  = speaker.get("name", "Elif")
     role  = speaker.get("role", "Sunucu")
@@ -298,15 +289,10 @@ def render_frame(slide_img, slide_idx, total, t, speaker: dict, has_audio: bool)
     overlay_h = 52
     draw.rectangle([0, 0, w, overlay_h], fill=(6, 6, 18, 210))
     draw.rectangle([0, overlay_h-3, w, overlay_h], fill=color)
-
     fn16 = _font(16); fn14 = _font(14); fn12 = _font(12)
     draw.text((18, 14), "3 SORU · 3 DAKİKA", font=fn16, fill=(*color, 220))
-
-    # Konuşmacı bilgisi (sağ taraf)
     spk_label = f"{emoji}  {name}  ·  {role}"
     draw.text((w - 340, 14), spk_label, font=fn14, fill=(210, 210, 230, 215))
-
-    # Canlı dot (yanıp söner)
     da = int(180 + 75 * math.sin(t * math.pi * 4))
     draw.ellipse([w//2 - 52, 17, w//2 - 40, 29], fill=(220, 50, 50, da))
     draw.text((w//2 - 35, 13), "YAYIN", font=fn12, fill=(220, 50, 50, 210))
@@ -315,17 +301,11 @@ def render_frame(slide_img, slide_idx, total, t, speaker: dict, has_audio: bool)
     bot_y = h - 52
     draw.rectangle([0, bot_y, w, h], fill=(6, 6, 18, 220))
     draw.rectangle([0, bot_y, w, bot_y + 3], fill=color)
-
-    # Slayt numarası
     draw.text((18, bot_y + 16), f"Slayt {slide_idx+1} / {total}",
               font=fn14, fill=(160, 160, 190, 210))
-
-    # Progress bar (ince, alt kenarda)
     prog_w = int(w * (slide_idx + t) / max(total, 1))
     draw.rectangle([0, h - 6, w, h], fill=(14, 14, 28))
     draw.rectangle([0, h - 6, prog_w, h], fill=color)
-
-    # Ses animasyonu (equalizer)
     if has_audio:
         bc, bw, bg = 9, 5, 4
         bx0 = w - bc * (bw + bg) - 18
@@ -334,33 +314,39 @@ def render_frame(slide_img, slide_idx, total, t, speaker: dict, has_audio: bool)
             bh = int(4 + 16 * abs(math.sin(t * math.pi * 4.0 + bi * 0.9)))
             bx = bx0 + bi * (bw + bg)
             draw.rounded_rectangle([bx, by - bh, bx + bw, by], radius=2, fill=color)
-
     return np.array(frame)
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # VİDEO OLUŞTURMA — streaming (RAM optimizasyonu)
 # ═════════════════════════════════════════════════════════════════════════════
-
 def build_video(
     slide_images: list,
     audio_paths: list,
     durations: list,
-    speakers: list,          # Her slayt için konuşmacı dict
+    speakers: list,
     work_dir: str,
     cb=None,
 ) -> bytes:
+    # ── ffmpeg varlık kontrolü ────────────────────────────────
+    if not FFMPEG or not os.path.exists(FFMPEG):
+        raise RuntimeError(
+            "ffmpeg bulunamadı!\n\n"
+            "Çözüm 1 — requirements.txt dosyasına ekleyin:\n"
+            "  imageio[ffmpeg]\n\n"
+            "Çözüm 2 — packages.txt dosyasına ekleyin:\n"
+            "  ffmpeg\n\n"
+            f"Aranan yol: {FFMPEG!r}"
+        )
+
     n = len(slide_images)
     total_frames = sum(max(1, int(d * VIDEO_FPS)) for d in durations)
     done_frames  = 0
-
     tmp_video = os.path.join(work_dir, "raw_video.mp4")
     tmp_audio = os.path.join(work_dir, "concat_audio.aac")
     tmp_out   = os.path.join(work_dir, "output.mp4")
 
     # ── 1. Video stream ──────────────────────────────────────
     if cb: cb(0.05, "Video kareleri işleniyor...")
-
     ffmpeg_cmd = [
         FFMPEG, "-y",
         "-f", "rawvideo", "-vcodec", "rawvideo",
@@ -369,10 +355,18 @@ def build_video(
         "-vcodec", "libx264", "-crf", "22", "-preset", "fast",
         "-pix_fmt", "yuv420p", tmp_video,
     ]
-    proc = subprocess.Popen(
-        ffmpeg_cmd, stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    try:
+        proc = subprocess.Popen(
+            ffmpeg_cmd, stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        raise RuntimeError(
+            f"ffmpeg çalıştırılamadı: '{FFMPEG}'\n"
+            "requirements.txt → 'imageio[ffmpeg]'\n"
+            "packages.txt    → 'ffmpeg'"
+        )
+
     try:
         for idx, (img, aud_path, dur, spk) in enumerate(
                 zip(slide_images, audio_paths, durations, speakers)):
@@ -456,17 +450,14 @@ def build_video(
              timeout=300, step_name="Sessiz video")
 
     if cb: cb(1.0, "Tamamlandı! ✅")
-
     if os.path.exists(tmp_out):
         with open(tmp_out, "rb") as f:
             return f.read()
     raise RuntimeError("Çıktı MP4 oluşturulamadı.")
 
-
 # ═════════════════════════════════════════════════════════════════════════════
 # CSS
 # ═════════════════════════════════════════════════════════════════════════════
-
 CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,600;0,9..40,700&display=swap');
@@ -485,8 +476,6 @@ html,body,[class*="css"]{font-family:'DM Sans',sans-serif;}
 section[data-testid="stSidebar"]{
   background:rgba(4,4,14,.98);border-right:1px solid var(--gold-dim);
 }
-
-/* Hero */
 .hero{
   text-align:center;padding:2rem 1rem 1.2rem;
   border-bottom:1px solid var(--gold-dim);margin-bottom:1.4rem;
@@ -499,22 +488,16 @@ section[data-testid="stSidebar"]{
   background-clip:text;margin:0 0 .3rem;
 }
 .hero p{color:#4a5570;font-size:.75rem;letter-spacing:.18em;text-transform:uppercase;}
-
-/* Section label */
 .lbl{
   font-size:.59rem;letter-spacing:.22em;text-transform:uppercase;color:#3a4560;
   margin:.85rem 0 .4rem;border-left:2px solid var(--gold);padding-left:.5rem;
 }
-
-/* Stat row */
 .srow{
   display:flex;gap:.85rem;flex-wrap:wrap;padding:.52rem .95rem;margin:.5rem 0;
   background:var(--gold-glow);border:1px solid var(--gold-dim);border-radius:9px;
   font-size:.78rem;color:#667;align-items:center;
 }
 .srow strong{color:var(--gold);}
-
-/* Character card */
 .char-card{
   display:flex;align-items:center;gap:.8rem;padding:.7rem 1rem;margin:.35rem 0;
   background:var(--surface);border:1px solid var(--border);border-radius:11px;
@@ -527,8 +510,6 @@ section[data-testid="stSidebar"]{
 }
 .char-name{font-size:.9rem;font-weight:600;color:#dde;}
 .char-role{font-size:.72rem;color:#556;margin-left:auto;}
-
-/* Slide assignment card */
 .sl-card{
   padding:.65rem .9rem;margin:.28rem 0;
   background:var(--surface);border:1px solid var(--border);border-radius:9px;
@@ -536,18 +517,13 @@ section[data-testid="stSidebar"]{
 }
 .sl-num{font-size:.65rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;margin-bottom:.2rem;}
 .sl-note{font-size:.8rem;color:#889;line-height:1.55;font-style:italic;}
-
-/* Dep list */
 .dep{font-size:.72rem;margin:.12rem 0;line-height:1.5;}
 .ok{color:#6ed46a;}.er{color:#e07b7b;}
-
-/* Input tweaks */
 input[type="text"]{
   background:rgba(255,255,255,.05)!important;
   border:1px solid rgba(255,255,255,.1)!important;
   color:#eee!important;border-radius:8px!important;
 }
-
 audio{width:100%;border-radius:8px;margin:3px 0;}
 hr{border-color:var(--border);}
 .stProgress>div>div{border-radius:10px;}
@@ -566,29 +542,35 @@ hr{border-color:var(--border);}
   text-decoration:none;transition:background .18s;
 }
 .dl-alt:hover{background:rgba(201,168,76,.14);}
-
-/* Badge */
 .badge{
   display:inline-flex;align-items:center;gap:.28rem;
   padding:.18rem .55rem;border-radius:50px;font-size:.66rem;font-weight:700;
 }
 .badge-gold{background:rgba(201,168,76,.12);color:#C9A84C;border:1px solid rgba(201,168,76,.22);}
 .badge-blue{background:rgba(76,159,202,.12);color:#4C9FCA;border:1px solid rgba(76,159,202,.22);}
+/* ffmpeg uyarı kutusu */
+.ffmpeg-warn{
+  padding:.8rem 1rem;margin:.6rem 0;border-radius:10px;
+  background:rgba(224,123,123,.08);border:1px solid rgba(224,123,123,.25);
+  font-size:.8rem;color:#e07b7b;line-height:1.6;
+}
+.ffmpeg-warn code{
+  background:rgba(255,255,255,.07);padding:.1rem .35rem;
+  border-radius:4px;font-size:.75rem;
+}
 </style>
 """
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # SESSION STATE
 # ═════════════════════════════════════════════════════════════════════════════
-
 def init_state():
     defaults = {
         "ss_pptx_bytes":    None,
         "ss_slide_notes":   [],
         "ss_slide_images":  [],
-        "ss_slide_audio":   {},     # {slide_idx: bytes}
-        "ss_slide_speaker": {},     # {slide_idx: int (karakter indeksi)}
+        "ss_slide_audio":   {},
+        "ss_slide_speaker": {},
         "ss_global_audio":  None,
         "ss_durations":     {},
         "ss_use_global":    True,
@@ -599,36 +581,21 @@ def init_state():
         if k not in st.session_state:
             st.session_state[k] = v
 
-
 # ═════════════════════════════════════════════════════════════════════════════
 # KARAKTERLERİ YÖNETME
 # ═════════════════════════════════════════════════════════════════════════════
-
 def character_manager_ui():
-    """
-    Karakter listesini yönetir.
-    - Mevcut karakterleri göster (isim, rol, renk, emoji düzenlenebilir)
-    - Yeni karakter ekle
-    - Karakter sil (Elif silinemez)
-    Döner: güncel characters listesi
-    """
     chars = st.session_state.ss_characters
-
     st.markdown('<p class="lbl">🎭 Konuşmacılar</p>', unsafe_allow_html=True)
     st.caption(
         "Elif varsayılan konuşmacıdır. İstediğiniz kadar ekleyip çıkarabilirsiniz. "
         "Her konuşmacıya ayrı ses dosyası atayabilir veya tek sesi tüm sunuma uygulayabilirsiniz."
     )
-
-    # ── Mevcut karakterler ───────────────────────────────────
     to_delete = None
     for i, ch in enumerate(chars):
-        dot_color = f"#{ch['hex']}"
         is_default = (i == 0)
-
         with st.container():
             c1, c2, c3, c4 = st.columns([2.5, 2, 1.2, 0.7])
-
             with c1:
                 new_name = st.text_input(
                     "İsim", value=ch["name"],
@@ -639,7 +606,6 @@ def character_manager_ui():
                 )
                 if not is_default:
                     chars[i]["name"] = new_name or ch["name"]
-
             with c2:
                 new_role = st.text_input(
                     "Rol", value=ch["role"],
@@ -648,9 +614,7 @@ def character_manager_ui():
                     placeholder="Rol..."
                 )
                 chars[i]["role"] = new_role or ch["role"]
-
             with c3:
-                # Renk seçici (emoji seçimi)
                 emoji_options = ["🎤","👩‍💼","🎧","🎙️","💬","📢","🗣️","👤","🎵","📡"]
                 cur_emoji = ch.get("emoji","🎤")
                 cur_idx   = emoji_options.index(cur_emoji) if cur_emoji in emoji_options else 0
@@ -659,7 +623,6 @@ def character_manager_ui():
                     key=f"ch_emoji_{i}", label_visibility="collapsed",
                 )
                 chars[i]["emoji"] = sel_emoji
-
             with c4:
                 if is_default:
                     st.markdown(
@@ -671,8 +634,6 @@ def character_manager_ui():
                     if st.button("✕", key=f"ch_del_{i}", help=f"{ch['name']} sil",
                                  use_container_width=True):
                         to_delete = i
-
-            # Renk göstergesi çizgisi
             st.markdown(
                 f'<div class="char-card" style="margin-top:-6px;padding:.4rem .9rem;">'
                 f'<div class="char-dot" style="background:#{ch["hex"]};color:#{ch["hex"]};"></div>'
@@ -681,18 +642,14 @@ def character_manager_ui():
                 f'</div>',
                 unsafe_allow_html=True
             )
-
     if to_delete is not None:
         chars.pop(to_delete)
-        # Ses atamalarını güncelle
         new_speaker_map = {}
         for k, v in st.session_state.ss_slide_speaker.items():
             new_v = v if v < to_delete else max(0, v - 1)
             new_speaker_map[k] = new_v
         st.session_state.ss_slide_speaker = new_speaker_map
         st.rerun()
-
-    # ── Yeni karakter ekle ───────────────────────────────────
     st.markdown("---")
     with st.expander("➕ Yeni Konuşmacı Ekle", expanded=False):
         col_n, col_r, col_add = st.columns([2, 2, 1])
@@ -713,21 +670,13 @@ def character_manager_ui():
                     st.rerun()
                 else:
                     st.warning("İsim boş olamaz.")
-
     st.session_state.ss_characters = chars
     return chars
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # SES ATAMA BÖLÜMÜ
 # ═════════════════════════════════════════════════════════════════════════════
-
 def audio_assignment_ui(n_slides: int, chars: list):
-    """
-    Ses moduna göre UI göster.
-    Global modda: tek ses yükle → tüm slaytlara orantılı bölünür.
-    Slayt bazlı modda: her slayta konuşmacı ata + ses yükle.
-    """
     mode = st.radio(
         "Ses Modu",
         ["🔊 Tek ses — tüm sunuma", "🎙️ Her slayta ayrı ses"],
@@ -737,12 +686,10 @@ def audio_assignment_ui(n_slides: int, chars: list):
     st.session_state.ss_use_global = use_global
 
     if use_global:
-        # ── Global ses ──────────────────────────────────────
         st.caption(
             "**Tek ses modu:** Yüklediğiniz ses ffmpeg ile slaytlara eşit olarak bölünür. "
             "Konuşmacı olarak varsayılan (Elif) veya seçeceğiniz kişi tüm slaytlarda görünür."
         )
-
         col_g1, col_g2 = st.columns([2, 1])
         with col_g1:
             gf = st.file_uploader(
@@ -762,7 +709,6 @@ def audio_assignment_ui(n_slides: int, chars: list):
                     f"Slayt başına ~{per_slide:.1f} sn  ·  "
                     f"ffmpeg zamansal kesim"
                 )
-
         with col_g2:
             st.markdown('<p class="lbl">Tüm Slaytlar İçin Konuşmacı</p>', unsafe_allow_html=True)
             char_names = [f'{c["emoji"]} {c["name"]}' for c in chars]
@@ -771,21 +717,15 @@ def audio_assignment_ui(n_slides: int, chars: list):
                 key="wu_global_speaker", label_visibility="collapsed",
             )
             sel_idx = char_names.index(sel_global_speaker)
-            # Tüm slaytlara aynı konuşmacıyı ata
             for i in range(n_slides):
                 st.session_state.ss_slide_speaker[i] = sel_idx
-
     else:
-        # ── Slayt bazlı ses ─────────────────────────────────
         st.caption(
             "**Slayt bazlı mod:** Her slayta farklı konuşmacı ve ses dosyası atayabilirsiniz. "
             "Ses yüklenmeyen slaytlara otomatik sessizlik eklenir."
         )
-
         char_names = [f'{c["emoji"]} {c["name"]}' for c in chars]
         notes = st.session_state.ss_slide_notes
-
-        # Tüm slaytlara hızlı atama
         col_qa1, col_qa2 = st.columns([3, 1])
         with col_qa1:
             quick_speaker = st.selectbox(
@@ -799,16 +739,11 @@ def audio_assignment_ui(n_slides: int, chars: list):
                 for i in range(n_slides):
                     st.session_state.ss_slide_speaker[i] = q_idx
                 st.rerun()
-
         st.markdown("---")
-
-        # Her slayt için ayrı satır
         for i in range(n_slides):
             note_preview = (notes[i][:80]+"…") if i < len(notes) and len(notes[i])>80 else (notes[i] if i < len(notes) else "")
             cur_spk_idx = st.session_state.ss_slide_speaker.get(i, 0)
-            cur_spk_idx = min(cur_spk_idx, len(chars)-1)  # güvenlik
-
-            # Slayt header
+            cur_spk_idx = min(cur_spk_idx, len(chars)-1)
             spk_color = f'#{chars[cur_spk_idx]["hex"]}'
             st.markdown(
                 f'<div class="sl-card" style="border-left-color:{spk_color};">'
@@ -819,7 +754,6 @@ def audio_assignment_ui(n_slides: int, chars: list):
                 f'</div>',
                 unsafe_allow_html=True
             )
-
             sl_col1, sl_col2, sl_col3 = st.columns([1.5, 2.5, 0.5])
             with sl_col1:
                 sel = st.selectbox(
@@ -829,7 +763,6 @@ def audio_assignment_ui(n_slides: int, chars: list):
                 )
                 new_idx = char_names.index(sel)
                 st.session_state.ss_slide_speaker[i] = new_idx
-
             with sl_col2:
                 uf = st.file_uploader(
                     f"Ses S{i+1}", type=["mp3","wav","m4a","ogg"],
@@ -841,7 +774,6 @@ def audio_assignment_ui(n_slides: int, chars: list):
                     dur = audio_duration_sec_bytes(ab)
                     st.session_state.ss_durations[i]   = dur
                     st.audio(ab, format="audio/mp3")
-
             with sl_col3:
                 dur_val = st.session_state.ss_durations.get(i, 3.0)
                 if i in st.session_state.ss_slide_audio:
@@ -849,7 +781,6 @@ def audio_assignment_ui(n_slides: int, chars: list):
                 else:
                     st.caption(f"🔇 {dur_val:.0f}s")
 
-    # ── Manuel süre ayarı ────────────────────────────────────
     with st.expander("⚙️ Slayt sürelerini manuel ayarla (opsiyonel)", expanded=False):
         per_row = min(n_slides, 5)
         n_rows  = math.ceil(n_slides / per_row)
@@ -863,14 +794,11 @@ def audio_assignment_ui(n_slides: int, chars: list):
                     value=default, step=0.5, key=f"wu_dur_{i}",
                 )
                 st.session_state.ss_durations[i] = d
-
     return use_global
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
 # ═════════════════════════════════════════════════════════════════════════════
-
 def render_sidebar():
     with st.sidebar:
         st.markdown(
@@ -882,27 +810,45 @@ def render_sidebar():
             '</div>', unsafe_allow_html=True,
         )
         st.markdown("---")
-
-        # Karakter yönetimi sidebar'da
         character_manager_ui()
-
         st.markdown("---")
         st.markdown('<p class="lbl">Sistem Durumu</p>', unsafe_allow_html=True)
+
+        # ffmpeg durum mesajı
+        ffmpeg_label = "ffmpeg"
+        ffmpeg_hint  = "requirements.txt: imageio[ffmpeg]  VEYA  packages.txt: ffmpeg"
+        if FFMPEG_OK:
+            ffmpeg_short = FFMPEG.split("/")[-1] if FFMPEG else "ffmpeg"
+            ffmpeg_label = f"ffmpeg <span style='color:#2a3040;font-size:.6rem;'>({FFMPEG})</span>"
+
         checks = [
-            ("Pillow",       PIL_OK,     "pip: pillow"),
-            ("imageio",      IMAGEIO_OK, "pip: imageio[ffmpeg]"),
-            ("python-pptx",  PPTX_OK,   "pip: python-pptx"),
-            ("LibreOffice",  LO_OK,     "packages.txt: libreoffice"),
-            ("pdftoppm",     PPM_OK,    "packages.txt: poppler-utils"),
-            ("ffmpeg",       True,       "imageio_ffmpeg"),
+            ("Pillow",       PIL_OK,      "pip: pillow"),
+            ("imageio",      IMAGEIO_OK,  "pip: imageio[ffmpeg]"),
+            ("python-pptx",  PPTX_OK,     "pip: python-pptx"),
+            ("LibreOffice",  LO_OK,       "packages.txt: libreoffice"),
+            ("pdftoppm",     PPM_OK,      "packages.txt: poppler-utils"),
+            ("ffmpeg",       FFMPEG_OK,   ffmpeg_hint),
         ]
         for name, ok, hint in checks:
             cls = "ok" if ok else "er"
             icon = "🟢" if ok else "🔴"
+            extra = f' <span style="color:#2a3040;font-size:.63rem;">— {hint}</span>' if not ok else ""
+            display_name = ffmpeg_label if name == "ffmpeg" else name
             st.markdown(
-                f'<div class="dep {cls}">{icon} {name}'
-                + (f' <span style="color:#2a3040;font-size:.63rem;">— {hint}</span>' if not ok else "")
-                + "</div>",
+                f'<div class="dep {cls}">{icon} {display_name}{extra}</div>',
+                unsafe_allow_html=True,
+            )
+
+        # ffmpeg bulunamadıysa detaylı kılavuz
+        if not FFMPEG_OK:
+            st.markdown(
+                '<div class="ffmpeg-warn">'
+                '⚠️ <b>ffmpeg bulunamadı!</b><br>'
+                'requirements.txt dosyasına ekleyin:<br>'
+                '<code>imageio[ffmpeg]</code><br><br>'
+                'VEYA packages.txt dosyasına:<br>'
+                '<code>ffmpeg</code>'
+                '</div>',
                 unsafe_allow_html=True,
             )
 
@@ -924,19 +870,16 @@ def render_sidebar():
                 f'</div>',
                 unsafe_allow_html=True
             )
-
         st.markdown("---")
         st.markdown(
             '<div style="font-size:.6rem;color:#2a3040;text-align:center;">'
-            'v8.0 · Dinamik Karakter · ffmpeg concat</div>',
+            'v8.1 · Dinamik Karakter · ffmpeg concat</div>',
             unsafe_allow_html=True,
         )
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ═════════════════════════════════════════════════════════════════════════════
-
 def main():
     st.set_page_config(
         page_title="PPTX → MP4 Stüdyo",
@@ -946,7 +889,6 @@ def main():
     st.markdown(CSS, unsafe_allow_html=True)
     init_state()
     render_sidebar()
-
     st.markdown(
         '<div class="hero">'
         '<h1>🎬 PPTX + Ses → MP4</h1>'
@@ -954,7 +896,6 @@ def main():
         '</div>',
         unsafe_allow_html=True,
     )
-
     chars = st.session_state.ss_characters
 
     # ══════════════════════════════════════════════════════════
@@ -962,7 +903,6 @@ def main():
     # ══════════════════════════════════════════════════════════
     st.markdown('<p class="lbl">① PowerPoint Dosyası</p>', unsafe_allow_html=True)
     col_a, col_b = st.columns([1, 1], gap="large")
-
     with col_a:
         pptx_file = st.file_uploader(
             "PPTX", type=["pptx"], key="wu_pptx",
@@ -983,12 +923,9 @@ def main():
                     except Exception as e:
                         st.error(f"PPTX okunamadı: {e}")
                         st.session_state.ss_slide_notes = []
-
         if st.session_state.ss_pptx_bytes:
             n = len(st.session_state.ss_slide_notes)
             st.success(f"✅ Yüklendi — **{n}** slayt")
-
-            # Konuşmacı özeti
             char_names = [f'{c["emoji"]} {c["name"]}' for c in chars]
             spk_counts = {}
             for i in range(n):
@@ -1001,7 +938,6 @@ def main():
                 for name, cnt in spk_counts.items()
             )
             st.markdown(badges, unsafe_allow_html=True)
-
     with col_b:
         notes = st.session_state.ss_slide_notes
         if notes:
@@ -1032,7 +968,6 @@ def main():
     # ADIM 2 — SES & KONUŞMACI ATAMA
     # ══════════════════════════════════════════════════════════
     st.markdown('<p class="lbl">② Ses Dosyaları & Konuşmacı Atama</p>', unsafe_allow_html=True)
-
     if not st.session_state.ss_slide_notes:
         st.info("Önce bir PPTX dosyası yükleyin.")
     else:
@@ -1048,22 +983,35 @@ def main():
 
     can_go = (
         st.session_state.ss_pptx_bytes is not None
-        and PIL_OK and IMAGEIO_OK and PPTX_OK and LO_OK and PPM_OK
+        and PIL_OK and IMAGEIO_OK and PPTX_OK and LO_OK and PPM_OK and FFMPEG_OK
     )
-
     if not can_go:
         if not st.session_state.ss_pptx_bytes:
             st.info("Önce PPTX dosyası yükleyin.")
         else:
-            missing = [n for n,ok in [("Pillow",PIL_OK),("imageio",IMAGEIO_OK),
-                       ("python-pptx",PPTX_OK),("libreoffice",LO_OK),
-                       ("poppler-utils",PPM_OK)] if not ok]
+            missing = []
+            if not PIL_OK:      missing.append("Pillow")
+            if not IMAGEIO_OK:  missing.append("imageio")
+            if not PPTX_OK:     missing.append("python-pptx")
+            if not LO_OK:       missing.append("libreoffice")
+            if not PPM_OK:      missing.append("poppler-utils")
+            if not FFMPEG_OK:   missing.append("ffmpeg")
             st.error(f"Eksik bağımlılık: {', '.join(missing)}")
+            if not FFMPEG_OK:
+                st.markdown(
+                    '<div class="ffmpeg-warn">'
+                    '🔧 <b>ffmpeg kurulumu için:</b><br><br>'
+                    '<b>requirements.txt</b> dosyasına ekleyin:<br>'
+                    '<code>imageio[ffmpeg]</code><br><br>'
+                    '<b>VEYA packages.txt</b> dosyasına ekleyin:<br>'
+                    '<code>ffmpeg</code>'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
     else:
         n_slides    = len(st.session_state.ss_slide_notes)
         total_secs  = sum(st.session_state.ss_durations.get(i, 3.0) for i in range(n_slides))
         mins, secs  = divmod(int(total_secs), 60)
-
         st.markdown(
             f'<div class="srow">'
             f'<span>🎞️ <strong>{n_slides}</strong> slayt</span>'
@@ -1074,7 +1022,6 @@ def main():
             f'</div>',
             unsafe_allow_html=True,
         )
-
         c1, c2 = st.columns([3, 1])
         with c1:
             make_btn = st.button(
@@ -1089,7 +1036,6 @@ def main():
 
         if make_btn:
             prog = st.progress(0); stat = st.empty(); t0 = time.time()
-
             def cb(pct, msg):
                 elapsed = time.time() - t0
                 prog.progress(min(float(pct), 1.0))
@@ -1098,15 +1044,11 @@ def main():
                     f'<span style="color:#3a4560;font-size:.76rem;">— {elapsed:.0f}s</span>',
                     unsafe_allow_html=True,
                 )
-
             work_dir = tempfile.mkdtemp(prefix="vidstudio_")
             try:
-                # A — Slayt görüntüleri
                 cb(0.02, "Slaytlar görüntüye dönüştürülüyor (LibreOffice + pdftoppm)…")
                 slide_imgs = pptx_to_images(st.session_state.ss_pptx_bytes)
                 n_actual   = len(slide_imgs)
-
-                # B — Ses hazırlama
                 cb(0.10, f"Ses segmentleri hazırlanıyor ({n_actual} slayt)…")
                 audio_paths, dur_list = prepare_audio_segments(
                     slide_audio_map = st.session_state.ss_slide_audio,
@@ -1116,14 +1058,10 @@ def main():
                     use_global      = st.session_state.ss_use_global,
                     work_dir        = work_dir,
                 )
-
-                # C — Her slayt için konuşmacı listesi
                 slide_speakers = [
                     chars[min(st.session_state.ss_slide_speaker.get(i, 0), len(chars)-1)]
                     for i in range(n_actual)
                 ]
-
-                # D — Video oluştur
                 video_bytes = build_video(
                     slide_images = slide_imgs,
                     audio_paths  = audio_paths,
@@ -1132,10 +1070,8 @@ def main():
                     work_dir     = work_dir,
                     cb           = cb,
                 )
-
                 st.session_state.ss_video_bytes  = video_bytes
                 st.session_state.ss_slide_images = slide_imgs
-
             except RuntimeError as e:
                 st.error(f"❌ Hata:\n\n{e}")
             except Exception as e:
@@ -1154,7 +1090,6 @@ def main():
                         if size > 1_048_576 else f"{size//1024:,} KB")
             st.success(f"✅ Video hazır — **{size_str}**")
             st.video(vb)
-
             col_d1, col_d2 = st.columns(2)
             with col_d1:
                 st.download_button(
@@ -1169,8 +1104,6 @@ def main():
                     '📥 Alternatif İndirme</a>',
                     unsafe_allow_html=True,
                 )
-
-            # Slayt önizlemeleri
             imgs = st.session_state.ss_slide_images
             if imgs:
                 st.markdown("---")
@@ -1183,7 +1116,6 @@ def main():
                     with pc[i % 4]:
                         st.image(img, caption=f"{spk['emoji']} {spk['name']} — S{i+1}",
                                  use_container_width=True)
-
 
 if __name__ == "__main__":
     main()
