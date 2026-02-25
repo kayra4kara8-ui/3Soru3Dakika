@@ -392,8 +392,8 @@ def render_frame(slide_img, slide_idx, total, t, speaker: dict, has_audio: bool)
     draw.rectangle([0, TOP_BAR - 2, wi, TOP_BAR], fill=(*color, 255))
 
     # Sol: program adı
-    draw.text((16, 8),  "3 SORU",   font=fn18, fill=(*color, 255))
-    draw.text((16, 32), "3 DAKiKA", font=fn11, fill=(*color, 170))
+    draw.text((16, 8),  "POL",   font=fn18, fill=(*color, 255))
+    draw.text((16, 32), "CAST", font=fn11, fill=(*color, 170))
 
     # Dikey ayraç
     draw.rectangle([108, 10, 110, TOP_BAR - 8], fill=(*color, 50))
@@ -436,7 +436,7 @@ def render_frame(slide_img, slide_idx, total, t, speaker: dict, has_audio: bool)
               font=fn13, fill=(140, 205, 175, 210))
 
     # Orta: program adı
-    mid_text = "3 Soru  |  3 Dakika"
+    mid_text = "POL  |  3 Dakika"
     try:
         mw = draw.textlength(mid_text, font=fn11)
     except Exception:
@@ -1196,7 +1196,7 @@ def main():
                     f'<span style="color:#2a4038;font-size:.76rem;">— {time.time()-t0:.0f}s</span>',
                     unsafe_allow_html=True)
 
-            work_dir = tempfile.mkdtemp(prefix="3soru_")
+            work_dir = tempfile.mkdtemp(prefix="POL_")
             try:
                 cb(0.02, "Slaytlar görüntüye dönüştürülüyor…")
                 slide_imgs = pptx_to_images(st.session_state.ss_pptx_bytes)
