@@ -435,8 +435,8 @@ def render_frame(slide_img, slide_idx, total, t, speaker: dict, has_audio: bool)
               f"Slayt {slide_idx + 1}  /  {total}",
               font=fn13, fill=(140, 205, 175, 210))
 
-    # Orta: program adı
-    mid_text = "POL  |  3 Dakika"
+    # Orta: program adı - DEĞİŞTİ: "POL  |  3 Dakika" → "POLCAST"
+    mid_text = "POLCAST"
     try:
         mw = draw.textlength(mid_text, font=fn11)
     except Exception:
@@ -965,7 +965,7 @@ def render_sidebar():
     with st.sidebar:
         st.markdown(
             '<div class="sb-brand">'
-            '<div class="sb-title">3 <em>Soru</em> 3 Dakika</div>'
+            '<div class="sb-title">POLCAST</div>'  # DEĞİŞTİ: "3 Soru 3 Dakika" → "POLCAST"
             '<div class="sb-name">Eczacı <strong>Elif Aracıoğlu</strong></div>'
             '</div>',
             unsafe_allow_html=True,
@@ -1048,7 +1048,7 @@ def main():
     st.markdown(
         '<div class="hero">'
         '<div class="hero-pill">💊 Video Stüdyo</div>'
-        '<h1>3 <em>Soru</em><br>3 Dakika</h1>'
+        '<h1>POLCAST</h1>'  # DEĞİŞTİ: "3 <em>Soru</em><br>3 Dakika" → "POLCAST"
         '<div class="hero-author">Eczacı &nbsp;<strong>Elif Aracıoğlu</strong></div>'
         '<div class="hero-rule"></div>'
         '</div>',
