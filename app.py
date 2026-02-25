@@ -168,10 +168,11 @@ def audio_duration_sec_bytes(data: bytes) -> float:
 # ═════════════════════════════════════════════════════════════════════════════
 # SES TEMİZLEME FİLTRE ZİNCİRİ
 # ═════════════════════════════════════════════════════════════════════════════
+# loudnorm KALDIRILDI — ses süresini uzatıyordu (3:37 → 3:46 yapıyordu)
+# Ses kalitesi için highpass + afftdn yeterli
 CLEAN_AF = (
     "highpass=f=80,"
     "afftdn=nf=-20,"
-    "loudnorm=I=-16:LRA=11:TP=-1.5,"
     "aresample=async=1:min_hard_comp=0.1:first_pts=0"
 )
 
@@ -295,19 +296,19 @@ def prepare_audio_segments(
         with open(raw_g, "wb") as f:
             f.write(global_audio)
 
-        # 2. Tek seferlik temizle
+        # 2. Ham ses süresini ÖNCE ölç (loudnorm uzatmadan önce)
+        raw_dur = audio_duration_ffprobe(raw_g)
+
+        # 3. Temizle (kalite için — ama süre hesabına katılmaz)
         clean_g = os.path.join(work_dir, "global_clean.aac")
         clean_audio(raw_g, clean_g, step="Global ses temizleme (highpass+afftdn+loudnorm)")
-        total_audio_dur = audio_duration_ffprobe(clean_g)
 
-        # 3. Ses süresini EŞIT böl — kullanıcı girişi görmezden geliniyor
-        #
-        # NEDEN: Kullanıcının girdiği süreler toplamı ses süresinden
-        # farklı olduğunda ölçekleme hatası oluşuyor.
-        # En güvenli yol: total_audio_dur / n_slides → her slayt eşit.
-        # Video süresi = ses süresi = matematiksel kesinlik.
+        # 4. Temizlenmiş süreyi de ölç; ikisinden KISA olanı kullan
+        # (loudnorm bazen 5-10sn ekleyebilir — güvenli taraf ham süre)
+        clean_dur = audio_duration_ffprobe(clean_g)
+        total_audio_dur = min(raw_dur, clean_dur)
+
         per_slide = total_audio_dur / max(n_slides, 1)
-
         acc = 0.0
         for i in range(n_slides):
             audio_paths.append(clean_g)
@@ -489,8 +490,12 @@ def build_video(
     audio_file  = next((p for p in audio_paths if p and os.path.exists(p)), None)
     has_audio   = audio_file is not None
 
-    # ── Gerçek ses süresi ─────────────────────────────────────────────────
-    if has_audio:
+    # ── Gerçek ses süresi: durations listesinden al (prepare'de hesaplandı) ──
+    # durations[i] = ham_süre / n_slides → toplamları = ham ses süresi
+    # Bu değer loudnorm uzatmasından etkilenmez
+    if has_audio and durations:
+        total_audio_dur = sum(durations)
+    elif has_audio:
         total_audio_dur = audio_duration_ffprobe(audio_file)
     else:
         total_audio_dur = sum(durations) if durations else n * 3.0
@@ -556,6 +561,9 @@ def build_video(
     if cb: cb(0.82, f"Ses ile birleştiriliyor… (hedef süre: {video_dur:.2f}sn)")
 
     if has_audio:
+        # -shortest: video (raw_vid) kaç frame içeriyorsa o kadar sürer.
+        # Ses o noktada kesilir. Video uzunluğu = pipe'tan gelen frame sayısı
+        # = total_frames / FPS → kesin, loudnorm uzatmasından etkilenmez.
         cmd_mux = [
             FFMPEG, "-y",
             "-i", raw_vid,
@@ -563,7 +571,7 @@ def build_video(
             "-map", "0:v:0", "-map", "1:a:0",
             "-c:v", "copy",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-            "-t", f"{video_dur:.6f}",   # video_dur = frame sayısından türetildi
+            "-shortest",
             "-movflags", "+faststart",
             out_mp4,
         ]
@@ -575,7 +583,7 @@ def build_video(
             "-map", "0:v:0", "-map", "1:a:0",
             "-c:v", "copy",
             "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-            "-t", f"{video_dur:.6f}",
+            "-shortest",
             "-movflags", "+faststart",
             out_mp4,
         ]
