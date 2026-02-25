@@ -352,89 +352,103 @@ def prepare_audio_segments(
 #
 # Slayt alanı: [TOP_BAR .. (H-BOT_BAR)] — bu bölgeye HİÇBİR ŞEY çizilmez.
 # ═════════════════════════════════════════════════════════════════════════════
+def _draw_speaker_dot(draw, x, y, r, color):
+    """Emoji yerine renkli dolu daire — font bağımlılığı yok."""
+    draw.ellipse([x - r, y - r, x + r, y + r], fill=color)
+
+def _draw_pill(draw, x, y, w, h, color, alpha=60):
+    """Arka plan hap şekli."""
+    draw.rounded_rectangle([x, y, x + w, y + h], radius=h // 2,
+                            fill=(*color, alpha))
+
 def render_frame(slide_img, slide_idx, total, t, speaker: dict, has_audio: bool):
     frame = slide_img.copy()
-    draw  = ImageDraw.Draw(frame)
-    w, h  = frame.size
+    draw  = ImageDraw.Draw(frame, "RGBA")
+    wi, hi = frame.size
     color = speaker.get("rgb", BRAND_RGB)
     name  = speaker.get("name", "Elif Aracıoğlu")
     role  = speaker.get("role", "Eczacı")
-    emoji = speaker.get("emoji", "💊")
+    # emoji artık kullanılmıyor — renkli daire kullanıyoruz
 
     fn18 = _font(18)
-    fn15 = _font(15)
     fn13 = _font(13)
     fn11 = _font(11)
 
     # ── ÜST BANT [0 .. TOP_BAR] ───────────────────────────────────────────────
-    # Yarı saydam koyu arka plan
-    draw.rectangle([0, 0, w, TOP_BAR], fill=(4, 8, 6))
-    # Alt kenar çizgisi (renkli ince çubuk)
-    draw.rectangle([0, TOP_BAR - 2, w, TOP_BAR], fill=color)
+    draw.rectangle([0, 0, wi, TOP_BAR], fill=(4, 8, 6, 255))
+    draw.rectangle([0, TOP_BAR - 2, wi, TOP_BAR], fill=(*color, 255))
 
     # Sol: program adı
     draw.text((16, 8),  "3 SORU",   font=fn18, fill=(*color, 255))
-    draw.text((16, 32), "3 DAKİKA", font=fn11, fill=(*color, 170))
+    draw.text((16, 32), "3 DAKiKA", font=fn11, fill=(*color, 170))
 
     # Dikey ayraç
-    draw.rectangle([106, 10, 108, TOP_BAR - 8], fill=(*color, 55))
+    draw.rectangle([108, 10, 110, TOP_BAR - 8], fill=(*color, 50))
 
-    # Konuşmacı bilgisi
-    draw.text((118, 20), f"{emoji}  {name}  ·  {role}",
+    # Konuşmacı — renkli daire + isim + rol (emoji YOK)
+    dot_cx = 122
+    dot_cy = TOP_BAR // 2
+    _draw_speaker_dot(draw, dot_cx, dot_cy, 6, color)
+    draw.text((dot_cx + 12, dot_cy - 7),
+              f"{name}  |  {role}",
               font=fn13, fill=(195, 235, 215, 220))
 
-    # CANLI animasyonlu kırmızı nokta
+    # CANLI — animasyonlu kırmızı daire + yazı
     da  = int(175 + 80 * math.sin(t * math.pi * 4))
-    cx  = w // 2 + 80
-    dot_y = TOP_BAR // 2
-    draw.ellipse([cx - 6, dot_y - 6, cx + 6, dot_y + 6], fill=(210, 55, 55, da))
-    draw.text((cx + 10, dot_y - 7), "CANLI", font=fn11, fill=(210, 55, 55, 210))
+    cx  = wi // 2 + 80
+    draw.ellipse([cx - 6, dot_cy - 6, cx + 6, dot_cy + 6],
+                 fill=(210, 55, 55, da))
+    draw.text((cx + 12, dot_cy - 7), "CANLI",
+              font=fn11, fill=(210, 55, 55, 210))
 
-    # Sağ: marka (küçük, ince)
-    brand_text = f"💊 Eczacı Elif Aracıoğlu"
+    # Sağ: marka — renkli daire + metin (emoji YOK)
+    brand_text = "Eczaci Elif Aracıoglu"
     try:
-        bw = draw.textlength(brand_text, font=fn11)
+        btw = draw.textlength(brand_text, font=fn11)
     except Exception:
-        bw = len(brand_text) * 6
-    draw.text((w - int(bw) - 16, dot_y - 7), brand_text,
-              font=fn11, fill=(*color, 140))
+        btw = len(brand_text) * 6
+    bx = wi - int(btw) - 28
+    _draw_speaker_dot(draw, bx - 8, dot_cy, 5, color)
+    draw.text((bx, dot_cy - 7), brand_text,
+              font=fn11, fill=(*color, 145))
 
     # ── ALT BANT [(H-BOT_BAR) .. H] ───────────────────────────────────────────
-    bot_y = h - BOT_BAR
-    draw.rectangle([0, bot_y, w, h], fill=(4, 8, 6))
-    # Üst kenar çizgisi
-    draw.rectangle([0, bot_y, w, bot_y + 2], fill=color)
+    bot_y = hi - BOT_BAR
+    draw.rectangle([0, bot_y, wi, hi], fill=(4, 8, 6, 255))
+    draw.rectangle([0, bot_y, wi, bot_y + 2], fill=(*color, 255))
 
     # Sol: slayt numarası
     draw.text((16, bot_y + (BOT_BAR - 14) // 2),
               f"Slayt {slide_idx + 1}  /  {total}",
               font=fn13, fill=(140, 205, 175, 210))
 
-    # Orta: program adı (küçük)
-    mid_text = "3 Soru · 3 Dakika"
+    # Orta: program adı
+    mid_text = "3 Soru  |  3 Dakika"
     try:
         mw = draw.textlength(mid_text, font=fn11)
     except Exception:
         mw = len(mid_text) * 6
-    draw.text((w // 2 - int(mw) // 2, bot_y + (BOT_BAR - 12) // 2),
+    draw.text((wi // 2 - int(mw) // 2, bot_y + (BOT_BAR - 12) // 2),
               mid_text, font=fn11, fill=(*color, 90))
 
-    # İlerleme çubuğu (en alt 5 piksel)
-    pw = int(w * (slide_idx + t) / max(total, 1))
-    draw.rectangle([0, h - 5, w, h], fill=(8, 14, 11))
-    draw.rectangle([0, h - 5, pw, h], fill=color)
+    # İlerleme çubuğu
+    pw = int(wi * (slide_idx + t) / max(total, 1))
+    draw.rectangle([0, hi - 5, wi, hi], fill=(8, 14, 11, 255))
+    draw.rectangle([0, hi - 5, pw, hi], fill=(*color, 255))
 
-    # Ses dalgası animasyonu (sağ taraf, alt bantta)
+    # Ses dalgası (sağ alt)
     if has_audio:
         bc, bw2, bg = 9, 4, 4
-        bx0 = w - bc * (bw2 + bg) - 16
-        by  = h - 8
+        bx0 = wi - bc * (bw2 + bg) - 16
+        by  = hi - 8
         for bi in range(bc):
             bh  = int(3 + 14 * abs(math.sin(t * math.pi * 4.2 + bi * 0.95)))
-            bx  = bx0 + bi * (bw2 + bg)
-            draw.rounded_rectangle([bx, by - bh, bx + bw2, by], radius=2, fill=color)
+            bx2 = bx0 + bi * (bw2 + bg)
+            draw.rounded_rectangle([bx2, by - bh, bx2 + bw2, by],
+                                   radius=2, fill=(*color, 255))
 
-    return np.array(frame)
+    # RGBA → RGB
+    return np.array(frame.convert("RGB"))
 
 # ═════════════════════════════════════════════════════════════════════════════
 # BİREBİR SENKRON VİDEO — Slayt başına ayrı MP4 → concat
@@ -454,32 +468,44 @@ def _encode_slide_segment(
     audio_path, seek_start: float, dur: float,
     speaker: dict, work_dir: str, seg_idx: int,
 ) -> str:
-    # ── SENKRON YAKLAŞIMI ──────────────────────────────────────────────────
-    # Sorun: pipe üzerinden video + ses aynı anda encode edilince ffmpeg
-    # pipe kapanma zamanlamasına göre video süresini belirliyor ve ses
-    # süresiyle örtüşmüyor.
+    # ── SENKRON YAKLAŞIMI v15 ─────────────────────────────────────────────
+    # Video süresi = SES SÜRESİ (dur), kesinlikle başka hiçbir şeyden değil.
     #
-    # Çözüm — 2 adım:
-    #   1. Sadece video karelerini raw pipe ile muxsuz encode et (sadece video stream)
-    #   2. ffmpeg -i video.mp4 -ss seek -t dur -i audio → mux et
-    # Adım 2'de video süresi zaten sabit (adım 1'den geliyor).
-    # ffmpeg ses akışını tam -t dur ile keser → senkron matematiksel kesinlik.
-    # ─────────────────────────────────────────────────────────────────────────
+    # Adım 1: Ses segmentini ana dosyadan kes → ayrı .aac dosyası
+    #         Bu dosyanın gerçek süresini ffprobe ile ölç → real_dur
+    # Adım 2: real_dur kadar video frame üret (nf = round(real_dur * FPS))
+    # Adım 3: Video + ses mux (-shortest YOK, süreler zaten eşit)
+    #
+    # Neden Adım 1 ayrı dosya? -ss ile pipe+audio aynı anda kullanınca
+    # ffmpeg timestamp hizalama sorunu yaşıyor. Ses önceden kesilince
+    # hem süre garantili hem timestamp sıfırlanmış oluyor.
+    # ─────────────────────────────────────────────────────────────────────
     has_audio = audio_path is not None and os.path.exists(audio_path)
+    raw_vid   = os.path.join(work_dir, f"vid_{seg_idx:04d}.mp4")
+    seg_path  = os.path.join(work_dir, f"chunk_{seg_idx:04d}.mp4")
 
-    # Gerçek süre: ses dosyasından oku, dur ile karşılaştır
+    # ── ADIM 1: Ses segmentini kes, gerçek süreyi ölç ─────────────────────
     if has_audio:
-        total_file_dur = audio_duration_ffprobe(audio_path)
-        available      = max(total_file_dur - seek_start, 0.0)
-        actual_dur     = min(dur, available) if available > 0.05 else dur
+        seg_audio = os.path.join(work_dir, f"aud_{seg_idx:04d}.aac")
+        _run(
+            [FFMPEG, "-y",
+             "-ss", f"{seek_start:.6f}",
+             "-t",  f"{dur:.6f}",
+             "-i",  audio_path,
+             "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+             "-af", "aresample=async=1:min_hard_comp=0.1:first_pts=0",
+             seg_audio],
+            timeout=60, step_name=f"Ses kes seg {seg_idx}",
+        )
+        real_dur = audio_duration_ffprobe(seg_audio)
     else:
-        actual_dur = dur
+        seg_audio = _make_silence_aac(work_dir, seg_idx, dur)
+        real_dur  = dur
 
-    nf       = max(1, round(actual_dur * VIDEO_FPS))
-    raw_vid  = os.path.join(work_dir, f"vid_{seg_idx:04d}.mp4")   # sadece video
-    seg_path = os.path.join(work_dir, f"chunk_{seg_idx:04d}.mp4") # video + ses
+    # ── ADIM 2: Video karelerini ses süresiyle üret ────────────────────────
+    # nf tamamen real_dur'dan türüyor — başka hiçbir kaynaktan değil
+    nf = max(1, round(real_dur * VIDEO_FPS))
 
-    # ── ADIM 1: Sadece video karelerini encode et ──────────────────────────
     cmd_vid = [
         FFMPEG, "-y",
         "-f", "rawvideo", "-vcodec", "rawvideo",
@@ -487,7 +513,7 @@ def _encode_slide_segment(
         "-r", str(VIDEO_FPS), "-i", "pipe:0",
         "-vcodec", "libx264", "-crf", "22", "-preset", "fast",
         "-pix_fmt", "yuv420p", "-r", str(VIDEO_FPS), "-vsync", "cfr",
-        "-an",   # ses yok
+        "-an",
         raw_vid,
     ]
     try:
@@ -508,48 +534,30 @@ def _encode_slide_segment(
             raise RuntimeError(f"Video encode başarısız (segment {seg_idx})")
     except Exception as e:
         proc.kill()
-        raise RuntimeError(f"[Video adım1 seg {seg_idx}] {e}")
+        raise RuntimeError(f"[Video adım2 seg {seg_idx}] {e}")
 
-    # ── ADIM 2: Video + ses mux ────────────────────────────────────────────
-    # Video süresi artık sabit (raw_vid dosyasından geliyor).
-    # Ses: -ss seek_start -t actual_dur ile ana dosyadan okunuyor.
-    # -shortest: ikisinden kısa olan bitince dur (ses veya video 1 frame erken biterse tolerans)
-    if has_audio:
-        cmd_mux = [
-            FFMPEG, "-y",
-            "-i", raw_vid,                                      # video (sabit süre)
-            "-ss", f"{seek_start:.6f}",
-            "-t",  f"{actual_dur:.6f}",
-            "-i", audio_path,                                   # ses (seek + kes)
-            "-map", "0:v:0", "-map", "1:a:0",
-            "-c:v", "copy",                                     # video'ya dokunma
-            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-            "-af", "aresample=async=1:min_hard_comp=0.1:first_pts=0",
-            "-shortest",                                        # ikisi eşit uzunlukta olacak
-            "-movflags", "+faststart",
-            seg_path,
-        ]
-    else:
-        # Ses yok → sessizlik ekle
-        cmd_mux = [
-            FFMPEG, "-y",
-            "-i", raw_vid,
-            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-            "-map", "0:v:0", "-map", "1:a:0",
-            "-c:v", "copy",
-            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-            "-t", f"{actual_dur:.6f}",
-            "-shortest",
-            "-movflags", "+faststart",
-            seg_path,
-        ]
-    _run(cmd_mux, timeout=120, step_name=f"Mux seg {seg_idx}")
+    # ── ADIM 3: Mux — video + ses ─────────────────────────────────────────
+    # Video süresi = nf/FPS, ses süresi = real_dur → matematiksel olarak eşit
+    # -shortest KULLANILMIYOR: ikisi zaten eşit, -shortest kullanmak
+    # bazen 1 frame eksik kesebiliyor
+    _run(
+        [FFMPEG, "-y",
+         "-i", raw_vid,
+         "-i", seg_audio,
+         "-map", "0:v:0", "-map", "1:a:0",
+         "-c:v", "copy",
+         "-c:a", "copy",
+         "-movflags", "+faststart",
+         seg_path],
+        timeout=120, step_name=f"Mux seg {seg_idx}",
+    )
 
-    # Geçici video dosyasını temizle
-    try:
-        os.unlink(raw_vid)
-    except Exception:
-        pass
+    # Geçici dosyaları temizle
+    for tmp in [raw_vid, seg_audio]:
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
 
     return seg_path
 
