@@ -415,7 +415,7 @@ def render_frame(slide_img, slide_idx, total, t, speaker: dict, has_audio: bool)
               font=fn11, fill=(210, 55, 55, 210))
 
     # Sağ: marka — renkli daire + metin (emoji YOK)
-    brand_text = "Eczaci Elif Aracıoglu"
+    brand_text = "Eczacı Elif Aracıoglu"
     try:
         btw = draw.textlength(brand_text, font=fn11)
     except Exception:
