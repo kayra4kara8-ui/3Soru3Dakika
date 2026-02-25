@@ -278,15 +278,35 @@ def prepare_audio_segments(
             f.write(global_audio)
         clean_g = os.path.join(work_dir, "global_clean.aac")
         clean_audio(raw_g, clean_g, step="Global ses temizleme (highpass+afftdn+loudnorm)")
-        total_dur = audio_duration_ffprobe(clean_g)
-        per_slide = total_dur / max(n_slides, 1)
+        total_audio_dur = audio_duration_ffprobe(clean_g)
+
+        # Kullanıcının ayarladığı süreler varsa bunları ağırlık olarak kullan,
+        # yoksa eşit dağıt. Ağırlıklar toplam ses süresine orantılı ölçeklenir.
+        raw_weights = [durations.get(i, 0.0) for i in range(n_slides)]
+        total_weight = sum(raw_weights)
+        if total_weight <= 0:
+            # Hiç ayar yapılmamış → eşit böl
+            raw_weights = [1.0] * n_slides
+            total_weight = float(n_slides)
+
+        # Her slayta düşen gerçek ses süresi (toplam ses süresiyle orantılı)
+        seg_durs = [total_audio_dur * (w / total_weight) for w in raw_weights]
+
+        # Kümülatif başlangıç zamanları
+        starts = []
+        acc = 0.0
+        for d in seg_durs:
+            starts.append(acc)
+            acc += d
+
         for i in range(n_slides):
-            ss  = i * per_slide
+            ss       = starts[i]
+            seg_dur  = seg_durs[i]
             seg = os.path.join(work_dir, f"seg_{i:04d}.aac")
             try:
                 _run(
                     [FFMPEG, "-y",
-                     "-ss", f"{ss:.6f}", "-t", f"{per_slide:.6f}",
+                     "-ss", f"{ss:.6f}", "-t", f"{seg_dur:.6f}",
                      "-i", clean_g,
                      "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
                      "-af", "aresample=async=1:min_hard_comp=0.1:first_pts=0",
@@ -297,7 +317,7 @@ def prepare_audio_segments(
                 dur_list.append(audio_duration_ffprobe(seg))
             except Exception:
                 audio_paths.append(None)
-                dur_list.append(per_slide)
+                dur_list.append(seg_dur)
     else:
         for i in range(n_slides):
             ab = slide_audio_map.get(i)
@@ -790,12 +810,17 @@ def audio_assignment_ui(n_slides: int, chars: list):
                 st.session_state.ss_global_audio = ab
                 total_dur = audio_duration_sec_bytes(ab)
                 per_slide = total_dur / max(n_slides, 1)
+                # Sadece henüz ayarlanmamış (0 veya çok küçük) slaytlara varsayılan yaz
                 for i in range(n_slides):
-                    st.session_state.ss_durations[i] = per_slide
+                    if st.session_state.ss_durations.get(i, 0.0) <= 0.5:
+                        st.session_state.ss_durations[i] = per_slide
                 st.audio(ab, format="audio/mp3")
+                cur_weights = [st.session_state.ss_durations.get(i, per_slide) for i in range(n_slides)]
+                cur_total   = sum(cur_weights)
                 st.caption(
-                    f"Toplam ~{total_dur:.1f} sn  ·  "
-                    f"Slayt başına ~{per_slide:.1f} sn  ·  temizleme aktif"
+                    f"Toplam ses ~{total_dur:.1f} sn  ·  "
+                    f"Slayt süre toplamı: {cur_total:.1f} sn  ·  "
+                    f"Ses, ayarlanan sürelere orantılı bölünür"
                 )
         with col_g2:
             st.markdown('<p class="lbl">Tüm Slaytlar — Konuşmacı</p>', unsafe_allow_html=True)
