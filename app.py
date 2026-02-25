@@ -352,207 +352,107 @@ def prepare_audio_segments(
 #
 # Slayt alanı: [TOP_BAR .. (H-BOT_BAR)] — bu bölgeye HİÇBİR ŞEY çizilmez.
 # ═════════════════════════════════════════════════════════════════════════════
+def _draw_speaker_dot(draw, x, y, r, color):
+    """Emoji yerine renkli dolu daire — font bağımlılığı yok."""
+    draw.ellipse([x - r, y - r, x + r, y + r], fill=color)
+
+def _draw_pill(draw, x, y, w, h, color, alpha=60):
+    """Arka plan hap şekli."""
+    draw.rounded_rectangle([x, y, x + w, y + h], radius=h // 2,
+                            fill=(*color, alpha))
+
 def render_frame(slide_img, slide_idx, total, t, speaker: dict, has_audio: bool):
     frame = slide_img.copy()
-    draw  = ImageDraw.Draw(frame)
-    w, h  = frame.size
+    draw  = ImageDraw.Draw(frame, "RGBA")
+    wi, hi = frame.size
     color = speaker.get("rgb", BRAND_RGB)
     name  = speaker.get("name", "Elif Aracıoğlu")
     role  = speaker.get("role", "Eczacı")
-    emoji = speaker.get("emoji", "💊")
+    # emoji artık kullanılmıyor — renkli daire kullanıyoruz
 
     fn18 = _font(18)
-    fn15 = _font(15)
     fn13 = _font(13)
     fn11 = _font(11)
 
     # ── ÜST BANT [0 .. TOP_BAR] ───────────────────────────────────────────────
-    # Yarı saydam koyu arka plan
-    draw.rectangle([0, 0, w, TOP_BAR], fill=(4, 8, 6))
-    # Alt kenar çizgisi (renkli ince çubuk)
-    draw.rectangle([0, TOP_BAR - 2, w, TOP_BAR], fill=color)
+    draw.rectangle([0, 0, wi, TOP_BAR], fill=(4, 8, 6, 255))
+    draw.rectangle([0, TOP_BAR - 2, wi, TOP_BAR], fill=(*color, 255))
 
     # Sol: program adı
     draw.text((16, 8),  "3 SORU",   font=fn18, fill=(*color, 255))
-    draw.text((16, 32), "3 DAKİKA", font=fn11, fill=(*color, 170))
+    draw.text((16, 32), "3 DAKiKA", font=fn11, fill=(*color, 170))
 
     # Dikey ayraç
-    draw.rectangle([106, 10, 108, TOP_BAR - 8], fill=(*color, 55))
+    draw.rectangle([108, 10, 110, TOP_BAR - 8], fill=(*color, 50))
 
-    # Konuşmacı bilgisi
-    draw.text((118, 20), f"{emoji}  {name}  ·  {role}",
+    # Konuşmacı — renkli daire + isim + rol (emoji YOK)
+    dot_cx = 122
+    dot_cy = TOP_BAR // 2
+    _draw_speaker_dot(draw, dot_cx, dot_cy, 6, color)
+    draw.text((dot_cx + 12, dot_cy - 7),
+              f"{name}  |  {role}",
               font=fn13, fill=(195, 235, 215, 220))
 
-    # CANLI animasyonlu kırmızı nokta
+    # CANLI — animasyonlu kırmızı daire + yazı
     da  = int(175 + 80 * math.sin(t * math.pi * 4))
-    cx  = w // 2 + 80
-    dot_y = TOP_BAR // 2
-    draw.ellipse([cx - 6, dot_y - 6, cx + 6, dot_y + 6], fill=(210, 55, 55, da))
-    draw.text((cx + 10, dot_y - 7), "CANLI", font=fn11, fill=(210, 55, 55, 210))
+    cx  = wi // 2 + 80
+    draw.ellipse([cx - 6, dot_cy - 6, cx + 6, dot_cy + 6],
+                 fill=(210, 55, 55, da))
+    draw.text((cx + 12, dot_cy - 7), "CANLI",
+              font=fn11, fill=(210, 55, 55, 210))
 
-    # Sağ: marka (küçük, ince)
-    brand_text = f"💊 Eczacı Elif Aracıoğlu"
+    # Sağ: marka — renkli daire + metin (emoji YOK)
+    brand_text = "Eczaci Elif Aracıoglu"
     try:
-        bw = draw.textlength(brand_text, font=fn11)
+        btw = draw.textlength(brand_text, font=fn11)
     except Exception:
-        bw = len(brand_text) * 6
-    draw.text((w - int(bw) - 16, dot_y - 7), brand_text,
-              font=fn11, fill=(*color, 140))
+        btw = len(brand_text) * 6
+    bx = wi - int(btw) - 28
+    _draw_speaker_dot(draw, bx - 8, dot_cy, 5, color)
+    draw.text((bx, dot_cy - 7), brand_text,
+              font=fn11, fill=(*color, 145))
 
     # ── ALT BANT [(H-BOT_BAR) .. H] ───────────────────────────────────────────
-    bot_y = h - BOT_BAR
-    draw.rectangle([0, bot_y, w, h], fill=(4, 8, 6))
-    # Üst kenar çizgisi
-    draw.rectangle([0, bot_y, w, bot_y + 2], fill=color)
+    bot_y = hi - BOT_BAR
+    draw.rectangle([0, bot_y, wi, hi], fill=(4, 8, 6, 255))
+    draw.rectangle([0, bot_y, wi, bot_y + 2], fill=(*color, 255))
 
     # Sol: slayt numarası
     draw.text((16, bot_y + (BOT_BAR - 14) // 2),
               f"Slayt {slide_idx + 1}  /  {total}",
               font=fn13, fill=(140, 205, 175, 210))
 
-    # Orta: program adı (küçük)
-    mid_text = "3 Soru · 3 Dakika"
+    # Orta: program adı
+    mid_text = "3 Soru  |  3 Dakika"
     try:
         mw = draw.textlength(mid_text, font=fn11)
     except Exception:
         mw = len(mid_text) * 6
-    draw.text((w // 2 - int(mw) // 2, bot_y + (BOT_BAR - 12) // 2),
+    draw.text((wi // 2 - int(mw) // 2, bot_y + (BOT_BAR - 12) // 2),
               mid_text, font=fn11, fill=(*color, 90))
 
-    # İlerleme çubuğu (en alt 5 piksel)
-    pw = int(w * (slide_idx + t) / max(total, 1))
-    draw.rectangle([0, h - 5, w, h], fill=(8, 14, 11))
-    draw.rectangle([0, h - 5, pw, h], fill=color)
+    # İlerleme çubuğu
+    pw = int(wi * (slide_idx + t) / max(total, 1))
+    draw.rectangle([0, hi - 5, wi, hi], fill=(8, 14, 11, 255))
+    draw.rectangle([0, hi - 5, pw, hi], fill=(*color, 255))
 
-    # Ses dalgası animasyonu (sağ taraf, alt bantta)
+    # Ses dalgası (sağ alt)
     if has_audio:
         bc, bw2, bg = 9, 4, 4
-        bx0 = w - bc * (bw2 + bg) - 16
-        by  = h - 8
+        bx0 = wi - bc * (bw2 + bg) - 16
+        by  = hi - 8
         for bi in range(bc):
             bh  = int(3 + 14 * abs(math.sin(t * math.pi * 4.2 + bi * 0.95)))
-            bx  = bx0 + bi * (bw2 + bg)
-            draw.rounded_rectangle([bx, by - bh, bx + bw2, by], radius=2, fill=color)
+            bx2 = bx0 + bi * (bw2 + bg)
+            draw.rounded_rectangle([bx2, by - bh, bx2 + bw2, by],
+                                   radius=2, fill=(*color, 255))
 
-    return np.array(frame)
+    # RGBA → RGB
+    return np.array(frame.convert("RGB"))
 
 # ═════════════════════════════════════════════════════════════════════════════
 # BİREBİR SENKRON VİDEO — Slayt başına ayrı MP4 → concat
 # ═════════════════════════════════════════════════════════════════════════════
-def _make_silence_aac(work_dir: str, idx: int, dur: float) -> str:
-    path = os.path.join(work_dir, f"sil_{idx:04d}.aac")
-    _run(
-        [FFMPEG, "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-         "-t", f"{dur:.6f}", "-c:a", "aac", "-b:a", "128k",
-         "-ar", "44100", "-ac", "2", path],
-        timeout=30, step_name=f"Sessizlik {idx}",
-    )
-    return path
-
-def _encode_slide_segment(
-    img, slide_idx: int, total: int,
-    audio_path, seek_start: float, dur: float,
-    speaker: dict, work_dir: str, seg_idx: int,
-) -> str:
-    # ── SENKRON YAKLAŞIMI ──────────────────────────────────────────────────
-    # Sorun: pipe üzerinden video + ses aynı anda encode edilince ffmpeg
-    # pipe kapanma zamanlamasına göre video süresini belirliyor ve ses
-    # süresiyle örtüşmüyor.
-    #
-    # Çözüm — 2 adım:
-    #   1. Sadece video karelerini raw pipe ile muxsuz encode et (sadece video stream)
-    #   2. ffmpeg -i video.mp4 -ss seek -t dur -i audio → mux et
-    # Adım 2'de video süresi zaten sabit (adım 1'den geliyor).
-    # ffmpeg ses akışını tam -t dur ile keser → senkron matematiksel kesinlik.
-    # ─────────────────────────────────────────────────────────────────────────
-    has_audio = audio_path is not None and os.path.exists(audio_path)
-
-    # Gerçek süre: ses dosyasından oku, dur ile karşılaştır
-    if has_audio:
-        total_file_dur = audio_duration_ffprobe(audio_path)
-        available      = max(total_file_dur - seek_start, 0.0)
-        actual_dur     = min(dur, available) if available > 0.05 else dur
-    else:
-        actual_dur = dur
-
-    nf       = max(1, round(actual_dur * VIDEO_FPS))
-    raw_vid  = os.path.join(work_dir, f"vid_{seg_idx:04d}.mp4")   # sadece video
-    seg_path = os.path.join(work_dir, f"chunk_{seg_idx:04d}.mp4") # video + ses
-
-    # ── ADIM 1: Sadece video karelerini encode et ──────────────────────────
-    cmd_vid = [
-        FFMPEG, "-y",
-        "-f", "rawvideo", "-vcodec", "rawvideo",
-        "-s", f"{VIDEO_W}x{VIDEO_H}", "-pix_fmt", "rgb24",
-        "-r", str(VIDEO_FPS), "-i", "pipe:0",
-        "-vcodec", "libx264", "-crf", "22", "-preset", "fast",
-        "-pix_fmt", "yuv420p", "-r", str(VIDEO_FPS), "-vsync", "cfr",
-        "-an",   # ses yok
-        raw_vid,
-    ]
-    try:
-        proc = subprocess.Popen(cmd_vid, stdin=subprocess.PIPE,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except FileNotFoundError:
-        raise RuntimeError(f"ffmpeg çalıştırılamadı: '{FFMPEG}'")
-    try:
-        for fi in range(nf):
-            t = fi / max(nf - 1, 1)
-            proc.stdin.write(
-                render_frame(img, slide_idx, total, t, speaker, has_audio)
-                .astype(np.uint8).tobytes()
-            )
-        proc.stdin.close()
-        proc.wait(timeout=300)
-        if proc.returncode != 0:
-            raise RuntimeError(f"Video encode başarısız (segment {seg_idx})")
-    except Exception as e:
-        proc.kill()
-        raise RuntimeError(f"[Video adım1 seg {seg_idx}] {e}")
-
-    # ── ADIM 2: Video + ses mux ────────────────────────────────────────────
-    # Video süresi artık sabit (raw_vid dosyasından geliyor).
-    # Ses: -ss seek_start -t actual_dur ile ana dosyadan okunuyor.
-    # -shortest: ikisinden kısa olan bitince dur (ses veya video 1 frame erken biterse tolerans)
-    if has_audio:
-        cmd_mux = [
-            FFMPEG, "-y",
-            "-i", raw_vid,                                      # video (sabit süre)
-            "-ss", f"{seek_start:.6f}",
-            "-t",  f"{actual_dur:.6f}",
-            "-i", audio_path,                                   # ses (seek + kes)
-            "-map", "0:v:0", "-map", "1:a:0",
-            "-c:v", "copy",                                     # video'ya dokunma
-            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-            "-af", "aresample=async=1:min_hard_comp=0.1:first_pts=0",
-            "-shortest",                                        # ikisi eşit uzunlukta olacak
-            "-movflags", "+faststart",
-            seg_path,
-        ]
-    else:
-        # Ses yok → sessizlik ekle
-        cmd_mux = [
-            FFMPEG, "-y",
-            "-i", raw_vid,
-            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-            "-map", "0:v:0", "-map", "1:a:0",
-            "-c:v", "copy",
-            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-            "-t", f"{actual_dur:.6f}",
-            "-shortest",
-            "-movflags", "+faststart",
-            seg_path,
-        ]
-    _run(cmd_mux, timeout=120, step_name=f"Mux seg {seg_idx}")
-
-    # Geçici video dosyasını temizle
-    try:
-        os.unlink(raw_vid)
-    except Exception:
-        pass
-
-    return seg_path
-
 def build_video(
     slide_images: list,
     audio_paths: list,
@@ -562,6 +462,20 @@ def build_video(
     work_dir: str,
     cb=None,
 ) -> bytes:
+    """
+    TEK GEÇİŞLİ ENCODE — segment yok, birleştirme yok, hata birikimi yok.
+
+    Yaklaşım:
+      1. Ses dosyasının GERÇEK süresini ffprobe ile ölç  → total_audio_dur
+      2. Her slayta düşen kare sayısını hesapla:
+           nf[i] = round(total_audio_dur / n_slides * FPS)
+           (hepsi eşit — toplam kare = round(total_audio_dur * FPS))
+      3. Tüm slayt karelerini TEK ffmpeg pipe'ına yaz (video only, -an)
+      4. Video + ses tek bir mux komutuyla birleştir (-c:v copy, -c:a copy)
+         Ses dosyası zaten temizlenmiş halde geliyor (prepare_audio_segments'ten)
+         → -t total_audio_dur ile kesilir, video da tam o kadar
+      5. Video süresi = ses süresi = matematiksel kesinlik, 1 frame bile fark yok
+    """
     if not FFMPEG or not os.path.exists(FFMPEG):
         raise RuntimeError(
             "ffmpeg bulunamadı!\n\n"
@@ -569,35 +483,117 @@ def build_video(
             "packages.txt    → ffmpeg\n\n"
             f"Aranan yol: {FFMPEG!r}"
         )
-    n       = len(slide_images)
-    tmp_out = os.path.join(work_dir, "output.mp4")
-    segs    = []
 
-    for idx, (img, aud_path, seek, dur, spk) in enumerate(
-            zip(slide_images, audio_paths, seek_starts, durations, speakers)):
-        if cb:
-            cb(0.05 + 0.82 * (idx / n),
-               f"Slayt {idx+1}/{n} encode ediliyor… seek={seek:.1f}s dur={dur:.1f}s")
-        segs.append(_encode_slide_segment(
-            img, idx, n, aud_path, seek, dur, spk, work_dir, idx))
+    n           = len(slide_images)
+    # Ses dosyası: global modda hepsi aynı dosya, audio_paths[0] yeterli
+    audio_file  = next((p for p in audio_paths if p and os.path.exists(p)), None)
+    has_audio   = audio_file is not None
 
-    if cb:
-        cb(0.90, f"{n} segment birleştiriliyor…")
-    concat_list = os.path.join(work_dir, "concat.txt")
-    with open(concat_list, "w") as f:
-        for p in segs:
-            f.write(f"file '{p}'\n")
-    _run(
-        [FFMPEG, "-y", "-f", "concat", "-safe", "0", "-i", concat_list,
-         "-c", "copy", "-vsync", "vfr", "-movflags", "+faststart", tmp_out],
-        timeout=600, step_name="Final concat (stream copy)",
-    )
-    if cb:
-        cb(1.0, "Tamamlandı! ✅")
-    if os.path.exists(tmp_out):
-        with open(tmp_out, "rb") as f:
+    # ── Gerçek ses süresi ─────────────────────────────────────────────────
+    if has_audio:
+        total_audio_dur = audio_duration_ffprobe(audio_file)
+    else:
+        total_audio_dur = sum(durations) if durations else n * 3.0
+
+    # ── Kare sayısı ve video süresi: SES'ten türetilir ───────────────────────
+    # total_frames: sesin tam olarak kaç kareye karşılık geldiği
+    # video_dur:    total_frames'i geri saniyeye çevir
+    #               → video_dur == total_frames/FPS (tam, yuvarlama yok)
+    # Mux'ta hem video hem ses "-t video_dur" ile kesilir
+    # → video süresi = ses süresi = matematiksel eşitlik garantisi
+    total_frames = max(1, round(total_audio_dur * VIDEO_FPS))
+    video_dur    = total_frames / VIDEO_FPS   # geri dönüştür — yuvarlama hatası yok
+
+    # Her slayta eşit kare
+    base_nf   = total_frames // n
+    remainder = total_frames - base_nf * n
+    nf_list   = [base_nf] * n
+    nf_list[-1] += remainder   # son slayta 1-2 fazla kare (görünmez)
+
+    raw_vid = os.path.join(work_dir, "raw_video.mp4")
+    out_mp4 = os.path.join(work_dir, "output.mp4")
+
+    # ── TEK PIPE: tüm slaytlar → tek video dosyası ────────────────────────
+    cmd_vid = [
+        FFMPEG, "-y",
+        "-f", "rawvideo", "-vcodec", "rawvideo",
+        "-s", f"{VIDEO_W}x{VIDEO_H}", "-pix_fmt", "rgb24",
+        "-r", str(VIDEO_FPS), "-i", "pipe:0",
+        "-vcodec", "libx264", "-crf", "22", "-preset", "fast",
+        "-pix_fmt", "yuv420p", "-r", str(VIDEO_FPS), "-vsync", "cfr",
+        "-an",
+        raw_vid,
+    ]
+
+    if cb: cb(0.05, f"Video encode ediliyor… ({total_frames} kare, {video_dur:.1f}sn)")
+
+    try:
+        proc = subprocess.Popen(cmd_vid, stdin=subprocess.PIPE,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except FileNotFoundError:
+        raise RuntimeError(f"ffmpeg çalıştırılamadı: '{FFMPEG}'")
+
+    try:
+        for slide_idx, (img, spk, nf) in enumerate(zip(slide_images, speakers, nf_list)):
+            if cb:
+                cb(0.05 + 0.75 * (slide_idx / n),
+                   f"Slayt {slide_idx+1}/{n} — {nf} kare ({nf/VIDEO_FPS:.1f}sn)")
+            for fi in range(nf):
+                t = fi / max(nf - 1, 1)
+                frame = render_frame(img, slide_idx, n, t, spk, has_audio)
+                proc.stdin.write(frame.astype(np.uint8).tobytes())
+        proc.stdin.close()
+        proc.wait(timeout=600)
+        if proc.returncode != 0:
+            raise RuntimeError("Video encode başarısız")
+    except Exception as e:
+        proc.kill()
+        raise RuntimeError(f"Video encode hatası: {e}")
+
+    # ── MUX: video + ses ─────────────────────────────────────────────────
+    # Her ikisi de "-t video_dur" ile kesilir.
+    # video_dur = total_frames / FPS → video kareleriyle 1:1 eşleşir.
+    if cb: cb(0.82, f"Ses ile birleştiriliyor… (hedef süre: {video_dur:.2f}sn)")
+
+    if has_audio:
+        cmd_mux = [
+            FFMPEG, "-y",
+            "-i", raw_vid,
+            "-i", audio_file,
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+            "-t", f"{video_dur:.6f}",   # video_dur = frame sayısından türetildi
+            "-movflags", "+faststart",
+            out_mp4,
+        ]
+    else:
+        cmd_mux = [
+            FFMPEG, "-y",
+            "-i", raw_vid,
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+            "-t", f"{video_dur:.6f}",
+            "-movflags", "+faststart",
+            out_mp4,
+        ]
+
+    _run(cmd_mux, timeout=300, step_name="Video+ses mux")
+
+    try:
+        os.unlink(raw_vid)
+    except Exception:
+        pass
+
+    if cb: cb(1.0, "Tamamlandı! ✅")
+
+    if os.path.exists(out_mp4):
+        with open(out_mp4, "rb") as f:
             return f.read()
     raise RuntimeError("Çıktı MP4 oluşturulamadı.")
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CSS — Eczacı yeşili #34A883 · Cormorant Garamond + DM Sans
