@@ -304,17 +304,29 @@ def prepare_audio_segments(
         clean_audio(raw_g, clean_g, step="Global ses temizleme (highpass+afftdn+loudnorm)")
 
         # 4. Temizlenmiş süreyi de ölç; ikisinden KISA olanı kullan
-        # (loudnorm bazen 5-10sn ekleyebilir — güvenli taraf ham süre)
         clean_dur = audio_duration_ffprobe(clean_g)
         total_audio_dur = min(raw_dur, clean_dur)
 
-        per_slide = total_audio_dur / max(n_slides, 1)
+        # 5. Kullanıcının girdiği süreler → seek noktaları
+        # Kullanıcı her slayt için süre girdiyse bunları kullan (orantısal).
+        # Girilmemişse eşit böl.
+        user_durs = [durations.get(i, 0.0) for i in range(n_slides)]
+        total_user = sum(user_durs)
+
+        if total_user > 0.5:
+            # Kullanıcı süreleri orantısını koru, toplamı ses süresine ölçekle
+            seg_durs = [total_audio_dur * (d / total_user) for d in user_durs]
+        else:
+            # Hiç girilmemiş → eşit böl
+            per = total_audio_dur / max(n_slides, 1)
+            seg_durs = [per] * n_slides
+
         acc = 0.0
-        for i in range(n_slides):
+        for i, sd in enumerate(seg_durs):
             audio_paths.append(clean_g)
             seek_starts.append(acc)
-            dur_list.append(per_slide)
-            acc += per_slide
+            dur_list.append(sd)
+            acc += sd
 
     else:
         # Slayt bazlı mod: her ses ayrı temizlenir, seek=0
@@ -500,20 +512,14 @@ def build_video(
     else:
         total_audio_dur = sum(durations) if durations else n * 3.0
 
-    # ── Kare sayısı ve video süresi: SES'ten türetilir ───────────────────────
-    # total_frames: sesin tam olarak kaç kareye karşılık geldiği
-    # video_dur:    total_frames'i geri saniyeye çevir
-    #               → video_dur == total_frames/FPS (tam, yuvarlama yok)
-    # Mux'ta hem video hem ses "-t video_dur" ile kesilir
-    # → video süresi = ses süresi = matematiksel eşitlik garantisi
-    total_frames = max(1, round(total_audio_dur * VIDEO_FPS))
-    video_dur    = total_frames / VIDEO_FPS   # geri dönüştür — yuvarlama hatası yok
-
-    # Her slayta eşit kare
-    base_nf   = total_frames // n
-    remainder = total_frames - base_nf * n
-    nf_list   = [base_nf] * n
-    nf_list[-1] += remainder   # son slayta 1-2 fazla kare (görünmez)
+    # ── Her slaytın kare sayısı: durations listesinden türetilir ─────────────
+    # durations[i] = prepare_audio_segments'ten gelen, ses süresine ölçeklenmiş
+    # Her slaytın video süresi = durations[i] → nf[i] = round(durations[i] * FPS)
+    # Toplam kare = sum(nf_list), video süresi = sum(nf_list) / FPS
+    # Mux: -shortest → video bitince ses de biter, tam eşleşir
+    nf_list = [max(1, round(d * VIDEO_FPS)) for d in durations]
+    total_frames = sum(nf_list)
+    video_dur    = total_frames / VIDEO_FPS
 
     raw_vid = os.path.join(work_dir, "raw_video.mp4")
     out_mp4 = os.path.join(work_dir, "output.mp4")
