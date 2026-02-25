@@ -300,24 +300,20 @@ def prepare_audio_segments(
         clean_audio(raw_g, clean_g, step="Global ses temizleme (highpass+afftdn+loudnorm)")
         total_audio_dur = audio_duration_ffprobe(clean_g)
 
-        # 3. Kullanıcının girdiği oranlar → gerçek ses süresine ölçekle
+        # 3. Ses süresini EŞIT böl — kullanıcı girişi görmezden geliniyor
         #
-        # KURAL: video süresi = ses süresi (kesinlikle, 1:1)
-        #   - Kullanıcının süreleri sadece ORAN belirler (hangi slayt uzun/kısa)
-        #   - Toplam video süresi = total_audio_dur (ses ne kadarsa o kadar)
-        #   - seg_durs toplamı = total_audio_dur (matematiksel kesinlik)
-        #   → +10 saniye fark imkânsız hale gelir
-        user_durs  = [max(durations.get(i, 1.0), 0.1) for i in range(n_slides)]
-        total_user = sum(user_durs)
-        seg_durs   = [total_audio_dur * (d / total_user) for d in user_durs]
+        # NEDEN: Kullanıcının girdiği süreler toplamı ses süresinden
+        # farklı olduğunda ölçekleme hatası oluşuyor.
+        # En güvenli yol: total_audio_dur / n_slides → her slayt eşit.
+        # Video süresi = ses süresi = matematiksel kesinlik.
+        per_slide = total_audio_dur / max(n_slides, 1)
 
-        # Kümülatif seek başlangıçları — bölme YOK, sadece timestamp
         acc = 0.0
-        for sd in seg_durs:
-            audio_paths.append(clean_g)  # hepsi aynı dosyayı gösterir
+        for i in range(n_slides):
+            audio_paths.append(clean_g)
             seek_starts.append(acc)
-            dur_list.append(sd)          # video da tam bu kadar sürer
-            acc += sd
+            dur_list.append(per_slide)
+            acc += per_slide
 
     else:
         # Slayt bazlı mod: her ses ayrı temizlenir, seek=0
@@ -458,51 +454,44 @@ def _encode_slide_segment(
     audio_path, seek_start: float, dur: float,
     speaker: dict, work_dir: str, seg_idx: int,
 ) -> str:
-    # seek_start: global ses dosyasında bu slaydın başlangıç saniyesi
-    # dur:        bu slaydın tam süresi (video frame sayısı buradan hesaplanır)
-    # video frame sayısı ve ses süresi (-t) matematiksel olarak aynı → senkron garantisi
+    # ── SENKRON YAKLAŞIMI ──────────────────────────────────────────────────
+    # Sorun: pipe üzerinden video + ses aynı anda encode edilince ffmpeg
+    # pipe kapanma zamanlamasına göre video süresini belirliyor ve ses
+    # süresiyle örtüşmüyor.
+    #
+    # Çözüm — 2 adım:
+    #   1. Sadece video karelerini raw pipe ile muxsuz encode et (sadece video stream)
+    #   2. ffmpeg -i video.mp4 -ss seek -t dur -i audio → mux et
+    # Adım 2'de video süresi zaten sabit (adım 1'den geliyor).
+    # ffmpeg ses akışını tam -t dur ile keser → senkron matematiksel kesinlik.
+    # ─────────────────────────────────────────────────────────────────────────
     has_audio = audio_path is not None and os.path.exists(audio_path)
-    if not has_audio:
-        try:
-            audio_path = _make_silence_aac(work_dir, seg_idx, dur)
-            seek_start = 0.0
-            has_audio  = True
-        except Exception:
-            pass
 
-    # Video süresi = dur (prepare_audio_segments'ten gelen, ses uzunluğuna ölçeklenmiş)
-    # Ses de aynı süre (-t dur) → video frame sayısı ve ses tamamen eşit
-    # Güvenlik: ses dosyası gerçekten bu kadar uzun mu kontrol et
-    if has_audio and seek_start >= 0:
-        remaining = max(audio_duration_ffprobe(audio_path) - seek_start, 0.0)
-        actual_dur = min(dur, remaining) if remaining > 0.05 else dur
+    # Gerçek süre: ses dosyasından oku, dur ile karşılaştır
+    if has_audio:
+        total_file_dur = audio_duration_ffprobe(audio_path)
+        available      = max(total_file_dur - seek_start, 0.0)
+        actual_dur     = min(dur, available) if available > 0.05 else dur
     else:
         actual_dur = dur
-    nf = max(1, round(actual_dur * VIDEO_FPS))
-    seg_path   = os.path.join(work_dir, f"chunk_{seg_idx:04d}.mp4")
 
-    # Ses tarafı: -ss seek_start -t dur → ana dosyadan tam bu aralığı oku
-    if has_audio:
-        audio_input = ["-ss", f"{seek_start:.6f}", "-t", f"{actual_dur:.6f}", "-i", audio_path]
-    else:
-        audio_input = ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
+    nf       = max(1, round(actual_dur * VIDEO_FPS))
+    raw_vid  = os.path.join(work_dir, f"vid_{seg_idx:04d}.mp4")   # sadece video
+    seg_path = os.path.join(work_dir, f"chunk_{seg_idx:04d}.mp4") # video + ses
 
-    cmd = (
-        [FFMPEG, "-y",
-         "-f", "rawvideo", "-vcodec", "rawvideo",
-         "-s", f"{VIDEO_W}x{VIDEO_H}", "-pix_fmt", "rgb24",
-         "-r", str(VIDEO_FPS), "-i", "pipe:0"]
-        + audio_input
-        + ["-t", f"{actual_dur:.6f}",
-           "-map", "0:v:0", "-map", "1:a:0",
-           "-vcodec", "libx264", "-crf", "22", "-preset", "fast",
-           "-pix_fmt", "yuv420p", "-r", str(VIDEO_FPS), "-vsync", "cfr",
-           "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-           "-af", "aresample=async=1:min_hard_comp=0.1:first_pts=0",
-           "-movflags", "+faststart", seg_path]
-    )
+    # ── ADIM 1: Sadece video karelerini encode et ──────────────────────────
+    cmd_vid = [
+        FFMPEG, "-y",
+        "-f", "rawvideo", "-vcodec", "rawvideo",
+        "-s", f"{VIDEO_W}x{VIDEO_H}", "-pix_fmt", "rgb24",
+        "-r", str(VIDEO_FPS), "-i", "pipe:0",
+        "-vcodec", "libx264", "-crf", "22", "-preset", "fast",
+        "-pix_fmt", "yuv420p", "-r", str(VIDEO_FPS), "-vsync", "cfr",
+        "-an",   # ses yok
+        raw_vid,
+    ]
     try:
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+        proc = subprocess.Popen(cmd_vid, stdin=subprocess.PIPE,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except FileNotFoundError:
         raise RuntimeError(f"ffmpeg çalıştırılamadı: '{FFMPEG}'")
@@ -516,10 +505,52 @@ def _encode_slide_segment(
         proc.stdin.close()
         proc.wait(timeout=300)
         if proc.returncode != 0:
-            raise RuntimeError(f"Segment encode başarısız (kod {proc.returncode})")
+            raise RuntimeError(f"Video encode başarısız (segment {seg_idx})")
     except Exception as e:
         proc.kill()
-        raise RuntimeError(f"[Segment {seg_idx}] {e}")
+        raise RuntimeError(f"[Video adım1 seg {seg_idx}] {e}")
+
+    # ── ADIM 2: Video + ses mux ────────────────────────────────────────────
+    # Video süresi artık sabit (raw_vid dosyasından geliyor).
+    # Ses: -ss seek_start -t actual_dur ile ana dosyadan okunuyor.
+    # -shortest: ikisinden kısa olan bitince dur (ses veya video 1 frame erken biterse tolerans)
+    if has_audio:
+        cmd_mux = [
+            FFMPEG, "-y",
+            "-i", raw_vid,                                      # video (sabit süre)
+            "-ss", f"{seek_start:.6f}",
+            "-t",  f"{actual_dur:.6f}",
+            "-i", audio_path,                                   # ses (seek + kes)
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "copy",                                     # video'ya dokunma
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+            "-af", "aresample=async=1:min_hard_comp=0.1:first_pts=0",
+            "-shortest",                                        # ikisi eşit uzunlukta olacak
+            "-movflags", "+faststart",
+            seg_path,
+        ]
+    else:
+        # Ses yok → sessizlik ekle
+        cmd_mux = [
+            FFMPEG, "-y",
+            "-i", raw_vid,
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+            "-t", f"{actual_dur:.6f}",
+            "-shortest",
+            "-movflags", "+faststart",
+            seg_path,
+        ]
+    _run(cmd_mux, timeout=120, step_name=f"Mux seg {seg_idx}")
+
+    # Geçici video dosyasını temizle
+    try:
+        os.unlink(raw_vid)
+    except Exception:
+        pass
+
     return seg_path
 
 def build_video(
