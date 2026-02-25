@@ -453,59 +453,61 @@ def render_frame(slide_img, slide_idx, total, t, speaker: dict, has_audio: bool)
 # ═════════════════════════════════════════════════════════════════════════════
 # BİREBİR SENKRON VİDEO — Slayt başına ayrı MP4 → concat
 # ═════════════════════════════════════════════════════════════════════════════
-def _make_silence_aac(work_dir: str, idx: int, dur: float) -> str:
-    path = os.path.join(work_dir, f"sil_{idx:04d}.aac")
-    _run(
-        [FFMPEG, "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
-         "-t", f"{dur:.6f}", "-c:a", "aac", "-b:a", "128k",
-         "-ar", "44100", "-ac", "2", path],
-        timeout=30, step_name=f"Sessizlik {idx}",
-    )
-    return path
+def build_video(
+    slide_images: list,
+    audio_paths: list,
+    seek_starts: list,
+    durations: list,
+    speakers: list,
+    work_dir: str,
+    cb=None,
+) -> bytes:
+    """
+    TEK GEÇİŞLİ ENCODE — segment yok, birleştirme yok, hata birikimi yok.
 
-def _encode_slide_segment(
-    img, slide_idx: int, total: int,
-    audio_path, seek_start: float, dur: float,
-    speaker: dict, work_dir: str, seg_idx: int,
-) -> str:
-    # ── SENKRON YAKLAŞIMI v15 ─────────────────────────────────────────────
-    # Video süresi = SES SÜRESİ (dur), kesinlikle başka hiçbir şeyden değil.
-    #
-    # Adım 1: Ses segmentini ana dosyadan kes → ayrı .aac dosyası
-    #         Bu dosyanın gerçek süresini ffprobe ile ölç → real_dur
-    # Adım 2: real_dur kadar video frame üret (nf = round(real_dur * FPS))
-    # Adım 3: Video + ses mux (-shortest YOK, süreler zaten eşit)
-    #
-    # Neden Adım 1 ayrı dosya? -ss ile pipe+audio aynı anda kullanınca
-    # ffmpeg timestamp hizalama sorunu yaşıyor. Ses önceden kesilince
-    # hem süre garantili hem timestamp sıfırlanmış oluyor.
-    # ─────────────────────────────────────────────────────────────────────
-    has_audio = audio_path is not None and os.path.exists(audio_path)
-    raw_vid   = os.path.join(work_dir, f"vid_{seg_idx:04d}.mp4")
-    seg_path  = os.path.join(work_dir, f"chunk_{seg_idx:04d}.mp4")
-
-    # ── ADIM 1: Ses segmentini kes, gerçek süreyi ölç ─────────────────────
-    if has_audio:
-        seg_audio = os.path.join(work_dir, f"aud_{seg_idx:04d}.aac")
-        _run(
-            [FFMPEG, "-y",
-             "-ss", f"{seek_start:.6f}",
-             "-t",  f"{dur:.6f}",
-             "-i",  audio_path,
-             "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-             "-af", "aresample=async=1:min_hard_comp=0.1:first_pts=0",
-             seg_audio],
-            timeout=60, step_name=f"Ses kes seg {seg_idx}",
+    Yaklaşım:
+      1. Ses dosyasının GERÇEK süresini ffprobe ile ölç  → total_audio_dur
+      2. Her slayta düşen kare sayısını hesapla:
+           nf[i] = round(total_audio_dur / n_slides * FPS)
+           (hepsi eşit — toplam kare = round(total_audio_dur * FPS))
+      3. Tüm slayt karelerini TEK ffmpeg pipe'ına yaz (video only, -an)
+      4. Video + ses tek bir mux komutuyla birleştir (-c:v copy, -c:a copy)
+         Ses dosyası zaten temizlenmiş halde geliyor (prepare_audio_segments'ten)
+         → -t total_audio_dur ile kesilir, video da tam o kadar
+      5. Video süresi = ses süresi = matematiksel kesinlik, 1 frame bile fark yok
+    """
+    if not FFMPEG or not os.path.exists(FFMPEG):
+        raise RuntimeError(
+            "ffmpeg bulunamadı!\n\n"
+            "requirements.txt → imageio[ffmpeg]\n"
+            "packages.txt    → ffmpeg\n\n"
+            f"Aranan yol: {FFMPEG!r}"
         )
-        real_dur = audio_duration_ffprobe(seg_audio)
+
+    n           = len(slide_images)
+    # Ses dosyası: global modda hepsi aynı dosya, audio_paths[0] yeterli
+    audio_file  = next((p for p in audio_paths if p and os.path.exists(p)), None)
+    has_audio   = audio_file is not None
+
+    # ── Gerçek ses süresi ─────────────────────────────────────────────────
+    if has_audio:
+        total_audio_dur = audio_duration_ffprobe(audio_file)
     else:
-        seg_audio = _make_silence_aac(work_dir, seg_idx, dur)
-        real_dur  = dur
+        total_audio_dur = sum(durations) if durations else n * 3.0
 
-    # ── ADIM 2: Video karelerini ses süresiyle üret ────────────────────────
-    # nf tamamen real_dur'dan türüyor — başka hiçbir kaynaktan değil
-    nf = max(1, round(real_dur * VIDEO_FPS))
+    # ── Her slayta düşen kare sayısı (eşit bölüm) ─────────────────────────
+    # Toplam kare = round(total_audio_dur * FPS) → video süresi = ses süresi
+    total_frames = max(1, round(total_audio_dur * VIDEO_FPS))
+    base_nf      = total_frames // n
+    remainder    = total_frames - base_nf * n
+    # Son slayta artanı ekle (1-2 kare fark, görünmez)
+    nf_list = [base_nf] * n
+    nf_list[-1] += remainder
 
+    raw_vid = os.path.join(work_dir, "raw_video.mp4")
+    out_mp4 = os.path.join(work_dir, "output.mp4")
+
+    # ── TEK PIPE: tüm slaytlar → tek video dosyası ────────────────────────
     cmd_vid = [
         FFMPEG, "-y",
         "-f", "rawvideo", "-vcodec", "rawvideo",
@@ -516,96 +518,76 @@ def _encode_slide_segment(
         "-an",
         raw_vid,
     ]
+
+    if cb: cb(0.05, "Video kareleri encode ediliyor…")
+
     try:
         proc = subprocess.Popen(cmd_vid, stdin=subprocess.PIPE,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except FileNotFoundError:
         raise RuntimeError(f"ffmpeg çalıştırılamadı: '{FFMPEG}'")
+
     try:
-        for fi in range(nf):
-            t = fi / max(nf - 1, 1)
-            proc.stdin.write(
-                render_frame(img, slide_idx, total, t, speaker, has_audio)
-                .astype(np.uint8).tobytes()
-            )
+        for slide_idx, (img, spk, nf) in enumerate(zip(slide_images, speakers, nf_list)):
+            if cb:
+                cb(0.05 + 0.75 * (slide_idx / n),
+                   f"Slayt {slide_idx+1}/{n} yazılıyor… ({nf} kare)")
+            for fi in range(nf):
+                t = fi / max(nf - 1, 1)
+                frame = render_frame(img, slide_idx, n, t, spk, has_audio)
+                proc.stdin.write(frame.astype(np.uint8).tobytes())
         proc.stdin.close()
-        proc.wait(timeout=300)
+        proc.wait(timeout=600)
         if proc.returncode != 0:
-            raise RuntimeError(f"Video encode başarısız (segment {seg_idx})")
+            raise RuntimeError("Video encode başarısız")
     except Exception as e:
         proc.kill()
-        raise RuntimeError(f"[Video adım2 seg {seg_idx}] {e}")
+        raise RuntimeError(f"Video encode hatası: {e}")
 
-    # ── ADIM 3: Mux — video + ses ─────────────────────────────────────────
-    # Video süresi = nf/FPS, ses süresi = real_dur → matematiksel olarak eşit
-    # -shortest KULLANILMIYOR: ikisi zaten eşit, -shortest kullanmak
-    # bazen 1 frame eksik kesebiliyor
-    _run(
-        [FFMPEG, "-y",
-         "-i", raw_vid,
-         "-i", seg_audio,
-         "-map", "0:v:0", "-map", "1:a:0",
-         "-c:v", "copy",
-         "-c:a", "copy",
-         "-movflags", "+faststart",
-         seg_path],
-        timeout=120, step_name=f"Mux seg {seg_idx}",
-    )
+    # ── MUX: video + ses ──────────────────────────────────────────────────
+    if cb: cb(0.82, "Ses ile birleştiriliyor…")
 
-    # Geçici dosyaları temizle
-    for tmp in [raw_vid, seg_audio]:
-        try:
-            os.unlink(tmp)
-        except Exception:
-            pass
+    if has_audio:
+        # Ses dosyası: seek_starts[0] = 0 (global modda zaten temizlenmiş tam dosya)
+        # -t total_audio_dur: video ile tam eşit uzunlukta kesilir
+        cmd_mux = [
+            FFMPEG, "-y",
+            "-i", raw_vid,
+            "-i", audio_file,
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+            "-t", f"{total_audio_dur:.6f}",
+            "-movflags", "+faststart",
+            out_mp4,
+        ]
+    else:
+        cmd_mux = [
+            FFMPEG, "-y",
+            "-i", raw_vid,
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+            "-t", f"{total_audio_dur:.6f}",
+            "-movflags", "+faststart",
+            out_mp4,
+        ]
 
-    return seg_path
+    _run(cmd_mux, timeout=300, step_name="Video+ses mux")
 
-def build_video(
-    slide_images: list,
-    audio_paths: list,
-    seek_starts: list,
-    durations: list,
-    speakers: list,
-    work_dir: str,
-    cb=None,
-) -> bytes:
-    if not FFMPEG or not os.path.exists(FFMPEG):
-        raise RuntimeError(
-            "ffmpeg bulunamadı!\n\n"
-            "requirements.txt → imageio[ffmpeg]\n"
-            "packages.txt    → ffmpeg\n\n"
-            f"Aranan yol: {FFMPEG!r}"
-        )
-    n       = len(slide_images)
-    tmp_out = os.path.join(work_dir, "output.mp4")
-    segs    = []
+    try:
+        os.unlink(raw_vid)
+    except Exception:
+        pass
 
-    for idx, (img, aud_path, seek, dur, spk) in enumerate(
-            zip(slide_images, audio_paths, seek_starts, durations, speakers)):
-        if cb:
-            cb(0.05 + 0.82 * (idx / n),
-               f"Slayt {idx+1}/{n} encode ediliyor… seek={seek:.1f}s dur={dur:.1f}s")
-        segs.append(_encode_slide_segment(
-            img, idx, n, aud_path, seek, dur, spk, work_dir, idx))
+    if cb: cb(1.0, "Tamamlandı! ✅")
 
-    if cb:
-        cb(0.90, f"{n} segment birleştiriliyor…")
-    concat_list = os.path.join(work_dir, "concat.txt")
-    with open(concat_list, "w") as f:
-        for p in segs:
-            f.write(f"file '{p}'\n")
-    _run(
-        [FFMPEG, "-y", "-f", "concat", "-safe", "0", "-i", concat_list,
-         "-c", "copy", "-vsync", "vfr", "-movflags", "+faststart", tmp_out],
-        timeout=600, step_name="Final concat (stream copy)",
-    )
-    if cb:
-        cb(1.0, "Tamamlandı! ✅")
-    if os.path.exists(tmp_out):
-        with open(tmp_out, "rb") as f:
+    if os.path.exists(out_mp4):
+        with open(out_mp4, "rb") as f:
             return f.read()
     raise RuntimeError("Çıktı MP4 oluşturulamadı.")
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # CSS — Eczacı yeşili #34A883 · Cormorant Garamond + DM Sans
