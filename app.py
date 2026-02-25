@@ -1,5 +1,5 @@
 """
-3 Soru 3 Dakika | Eczacı Elif Aracıoğlu | Video Stüdyo v13.0
+3 Soru 3 Dakika | Eczacı Elif Aracıoğlu | Video Stüdyo v14.0
 ──────────────────────────────────────────────────────────────
 • Marka rengi: Eczacı yeşili #34A883, Cormorant Garamond + DM Sans
 • Ses temizleme: highpass(80Hz) + afftdn(gürültü azaltma) + loudnorm(−16 LUFS)
@@ -260,7 +260,24 @@ def read_pptx_notes(pptx_bytes: bytes) -> list:
     return notes
 
 # ═════════════════════════════════════════════════════════════════════════════
-# SES HAZIRLAMA
+# SES HAZIRLAMA — v14 KÖK SENKRON ÇÖZÜMÜ
+# ─────────────────────────────────────────────────────────────────────────────
+# SORUN: Ses önce ayrı dosyalara bölünüyor, sonra video o dosyalara
+#   uyduruluyor. AAC encoder delay + timestamp birikimi → senkron kayıyor.
+#
+# ÇÖZÜM: Global modda ses HİÇ bölünmüyor.
+#   _encode_slide_segment, her segment için ffmpeg'e -ss (seek) ve -t (süre)
+#   parametresiyle DOĞRUDAN ana ses dosyasını okur.
+#   Seek noktası = kullanıcının girdiği kümülatif sürelerden hesaplanır.
+#   Video süresi = kullanıcının girdiği süre.
+#   Ses süresi  = aynı değer (-t ile kesilir).
+#   → Video frame sayısı ve ses süresi matematiksel olarak eşit → senkron
+#     kayması MÜMKÜN DEĞİL.
+#
+# Dönüş: (audio_paths, seek_starts, dur_list)
+#   audio_paths : ses dosyası yolu (global modda hepsi aynı dosya)
+#   seek_starts : ffmpeg -ss değeri (global: kümülatif, slayt: 0.0)
+#   dur_list    : her slaytın video ve ses süresi (saniye) — birebir eşit
 # ═════════════════════════════════════════════════════════════════════════════
 def prepare_audio_segments(
     slide_audio_map: dict,
@@ -269,56 +286,39 @@ def prepare_audio_segments(
     global_audio: bytes | None,
     use_global: bool,
     work_dir: str,
-) -> tuple[list, list]:
-    audio_paths, dur_list = [], []
+) -> tuple[list, list, list]:
+    audio_paths, seek_starts, dur_list = [], [], []
 
     if use_global and global_audio:
+        # 1. Ham sesi diske yaz
         raw_g = os.path.join(work_dir, "global_raw.audio")
         with open(raw_g, "wb") as f:
             f.write(global_audio)
+
+        # 2. Tek seferlik temizle
         clean_g = os.path.join(work_dir, "global_clean.aac")
         clean_audio(raw_g, clean_g, step="Global ses temizleme (highpass+afftdn+loudnorm)")
         total_audio_dur = audio_duration_ffprobe(clean_g)
 
-        # Kullanıcının ayarladığı süreler varsa bunları ağırlık olarak kullan,
-        # yoksa eşit dağıt. Ağırlıklar toplam ses süresine orantılı ölçeklenir.
-        raw_weights = [durations.get(i, 0.0) for i in range(n_slides)]
-        total_weight = sum(raw_weights)
-        if total_weight <= 0:
-            # Hiç ayar yapılmamış → eşit böl
-            raw_weights = [1.0] * n_slides
-            total_weight = float(n_slides)
+        # 3. Kullanıcının girdiği süreler → kümülatif seek noktaları
+        user_durs = [max(durations.get(i, 0.0), 0.5) for i in range(n_slides)]
+        total_user = sum(user_durs)
 
-        # Her slayta düşen gerçek ses süresi (toplam ses süresiyle orantılı)
-        seg_durs = [total_audio_dur * (w / total_weight) for w in raw_weights]
+        # Kullanıcı sürelerini toplam ses süresine ölçekle
+        # Böylece ses tam olarak tükenir, ne fazla ne eksik
+        scale    = total_audio_dur / max(total_user, 0.001)
+        seg_durs = [d * scale for d in user_durs]
 
-        # Kümülatif başlangıç zamanları
-        starts = []
+        # Kümülatif seek başlangıçları — bölme YOK, sadece timestamp
         acc = 0.0
-        for d in seg_durs:
-            starts.append(acc)
-            acc += d
+        for sd in seg_durs:
+            audio_paths.append(clean_g)  # hepsi aynı dosya
+            seek_starts.append(acc)
+            dur_list.append(sd)
+            acc += sd
 
-        for i in range(n_slides):
-            ss       = starts[i]
-            seg_dur  = seg_durs[i]
-            seg = os.path.join(work_dir, f"seg_{i:04d}.aac")
-            try:
-                _run(
-                    [FFMPEG, "-y",
-                     "-ss", f"{ss:.6f}", "-t", f"{seg_dur:.6f}",
-                     "-i", clean_g,
-                     "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-                     "-af", "aresample=async=1:min_hard_comp=0.1:first_pts=0",
-                     seg],
-                    timeout=60, step_name=f"Global bölme {i+1}/{n_slides}",
-                )
-                audio_paths.append(seg)
-                dur_list.append(audio_duration_ffprobe(seg))
-            except Exception:
-                audio_paths.append(None)
-                dur_list.append(seg_dur)
     else:
+        # Slayt bazlı mod: her ses ayrı temizlenir, seek=0
         for i in range(n_slides):
             ab = slide_audio_map.get(i)
             if ab:
@@ -328,15 +328,20 @@ def prepare_audio_segments(
                     f.write(ab)
                 try:
                     clean_audio(raw, clean, step=f"Slayt {i+1} ses temizleme")
+                    real_dur = audio_duration_ffprobe(clean)
                     audio_paths.append(clean)
-                    dur_list.append(audio_duration_ffprobe(clean))
+                    seek_starts.append(0.0)
+                    dur_list.append(real_dur)
                 except Exception:
                     audio_paths.append(None)
+                    seek_starts.append(0.0)
                     dur_list.append(durations.get(i, 3.0))
             else:
                 audio_paths.append(None)
+                seek_starts.append(0.0)
                 dur_list.append(durations.get(i, 3.0))
-    return audio_paths, dur_list
+
+    return audio_paths, seek_starts, dur_list
 
 # ═════════════════════════════════════════════════════════════════════════════
 # KARE RENDER — v13
@@ -448,28 +453,39 @@ def _make_silence_aac(work_dir: str, idx: int, dur: float) -> str:
 
 def _encode_slide_segment(
     img, slide_idx: int, total: int,
-    audio_path, dur: float,
+    audio_path, seek_start: float, dur: float,
     speaker: dict, work_dir: str, seg_idx: int,
 ) -> str:
+    # seek_start: global ses dosyasında bu slaydın başlangıç saniyesi
+    # dur:        bu slaydın tam süresi (video frame sayısı buradan hesaplanır)
+    # video frame sayısı ve ses süresi (-t) matematiksel olarak aynı → senkron garantisi
     has_audio = audio_path is not None and os.path.exists(audio_path)
     if not has_audio:
         try:
             audio_path = _make_silence_aac(work_dir, seg_idx, dur)
+            seek_start = 0.0
             has_audio  = True
         except Exception:
             pass
 
-    actual_dur = audio_duration_ffprobe(audio_path) if has_audio else dur
+    # Video süresi = kullanıcının girdiği süre (dur)
+    # Ses de aynı süre (-t dur) → matematiksel eşitlik
+    actual_dur = dur
     nf         = max(1, round(actual_dur * VIDEO_FPS))
     seg_path   = os.path.join(work_dir, f"chunk_{seg_idx:04d}.mp4")
+
+    # Ses tarafı: -ss seek_start -t dur → ana dosyadan tam bu aralığı oku
+    if has_audio:
+        audio_input = ["-ss", f"{seek_start:.6f}", "-t", f"{actual_dur:.6f}", "-i", audio_path]
+    else:
+        audio_input = ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
 
     cmd = (
         [FFMPEG, "-y",
          "-f", "rawvideo", "-vcodec", "rawvideo",
          "-s", f"{VIDEO_W}x{VIDEO_H}", "-pix_fmt", "rgb24",
          "-r", str(VIDEO_FPS), "-i", "pipe:0"]
-        + (["-i", audio_path] if has_audio
-           else ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"])
+        + audio_input
         + ["-t", f"{actual_dur:.6f}",
            "-map", "0:v:0", "-map", "1:a:0",
            "-vcodec", "libx264", "-crf", "22", "-preset", "fast",
@@ -502,6 +518,7 @@ def _encode_slide_segment(
 def build_video(
     slide_images: list,
     audio_paths: list,
+    seek_starts: list,
     durations: list,
     speakers: list,
     work_dir: str,
@@ -518,13 +535,13 @@ def build_video(
     tmp_out = os.path.join(work_dir, "output.mp4")
     segs    = []
 
-    for idx, (img, aud_path, dur, spk) in enumerate(
-            zip(slide_images, audio_paths, durations, speakers)):
+    for idx, (img, aud_path, seek, dur, spk) in enumerate(
+            zip(slide_images, audio_paths, seek_starts, durations, speakers)):
         if cb:
             cb(0.05 + 0.82 * (idx / n),
-               f"Slayt {idx+1}/{n} encode ediliyor… (ses+video birlikte)")
+               f"Slayt {idx+1}/{n} encode ediliyor… seek={seek:.1f}s dur={dur:.1f}s")
         segs.append(_encode_slide_segment(
-            img, idx, n, aud_path, dur, spk, work_dir, idx))
+            img, idx, n, aud_path, seek, dur, spk, work_dir, idx))
 
     if cb:
         cb(0.90, f"{n} segment birleştiriliyor…")
@@ -1137,7 +1154,7 @@ def main():
                 slide_imgs = pptx_to_images(st.session_state.ss_pptx_bytes)
                 n_actual   = len(slide_imgs)
                 cb(0.10, f"Ses temizleniyor ve segmentler hazırlanıyor ({n_actual} slayt)…")
-                audio_paths, dur_list = prepare_audio_segments(
+                audio_paths, seek_starts, dur_list = prepare_audio_segments(
                     slide_audio_map = st.session_state.ss_slide_audio,
                     durations       = st.session_state.ss_durations,
                     n_slides        = n_actual,
@@ -1152,6 +1169,7 @@ def main():
                 video_bytes = build_video(
                     slide_images = slide_imgs,
                     audio_paths  = audio_paths,
+                    seek_starts  = seek_starts,
                     durations    = dur_list,
                     speakers     = slide_speakers,
                     work_dir     = work_dir,
