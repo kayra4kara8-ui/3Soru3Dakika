@@ -1,5 +1,5 @@
 """
-3 Soru 3 Dakika | Eczacı Elif Aracıoğlu | Video Stüdyo v14.0
+POLCAST | Eczacı Elif Aracıoğlu | Video Stüdyo v14.0
 ──────────────────────────────────────────────────────────────
 • Marka rengi: Eczacı yeşili #34A883, Cormorant Garamond + DM Sans
 • Ses temizleme: highpass(80Hz) + afftdn(gürültü azaltma) + loudnorm(−16 LUFS)
@@ -1037,7 +1037,7 @@ def render_sidebar():
 # ═════════════════════════════════════════════════════════════════════════════
 def main():
     st.set_page_config(
-        page_title="3 Soru 3 Dakika · Elif Aracıoğlu",
+        page_title="POLCAST · Elif Aracıoğlu",
         page_icon="💊", layout="wide",
         initial_sidebar_state="expanded",
     )
