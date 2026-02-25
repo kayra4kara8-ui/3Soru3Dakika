@@ -300,21 +300,23 @@ def prepare_audio_segments(
         clean_audio(raw_g, clean_g, step="Global ses temizleme (highpass+afftdn+loudnorm)")
         total_audio_dur = audio_duration_ffprobe(clean_g)
 
-        # 3. Kullanıcının girdiği süreler → kümülatif seek noktaları
-        user_durs = [max(durations.get(i, 0.0), 0.5) for i in range(n_slides)]
+        # 3. Kullanıcının girdiği oranlar → gerçek ses süresine ölçekle
+        #
+        # KURAL: video süresi = ses süresi (kesinlikle, 1:1)
+        #   - Kullanıcının süreleri sadece ORAN belirler (hangi slayt uzun/kısa)
+        #   - Toplam video süresi = total_audio_dur (ses ne kadarsa o kadar)
+        #   - seg_durs toplamı = total_audio_dur (matematiksel kesinlik)
+        #   → +10 saniye fark imkânsız hale gelir
+        user_durs  = [max(durations.get(i, 1.0), 0.1) for i in range(n_slides)]
         total_user = sum(user_durs)
-
-        # Kullanıcı sürelerini toplam ses süresine ölçekle
-        # Böylece ses tam olarak tükenir, ne fazla ne eksik
-        scale    = total_audio_dur / max(total_user, 0.001)
-        seg_durs = [d * scale for d in user_durs]
+        seg_durs   = [total_audio_dur * (d / total_user) for d in user_durs]
 
         # Kümülatif seek başlangıçları — bölme YOK, sadece timestamp
         acc = 0.0
         for sd in seg_durs:
-            audio_paths.append(clean_g)  # hepsi aynı dosya
+            audio_paths.append(clean_g)  # hepsi aynı dosyayı gösterir
             seek_starts.append(acc)
-            dur_list.append(sd)
+            dur_list.append(sd)          # video da tam bu kadar sürer
             acc += sd
 
     else:
@@ -468,10 +470,15 @@ def _encode_slide_segment(
         except Exception:
             pass
 
-    # Video süresi = kullanıcının girdiği süre (dur)
-    # Ses de aynı süre (-t dur) → matematiksel eşitlik
-    actual_dur = dur
-    nf         = max(1, round(actual_dur * VIDEO_FPS))
+    # Video süresi = dur (prepare_audio_segments'ten gelen, ses uzunluğuna ölçeklenmiş)
+    # Ses de aynı süre (-t dur) → video frame sayısı ve ses tamamen eşit
+    # Güvenlik: ses dosyası gerçekten bu kadar uzun mu kontrol et
+    if has_audio and seek_start >= 0:
+        remaining = max(audio_duration_ffprobe(audio_path) - seek_start, 0.0)
+        actual_dur = min(dur, remaining) if remaining > 0.05 else dur
+    else:
+        actual_dur = dur
+    nf = max(1, round(actual_dur * VIDEO_FPS))
     seg_path   = os.path.join(work_dir, f"chunk_{seg_idx:04d}.mp4")
 
     # Ses tarafı: -ss seek_start -t dur → ana dosyadan tam bu aralığı oku
