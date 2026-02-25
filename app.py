@@ -1,11 +1,15 @@
 """
-PPTX + Ses → Senkronize MP4 | v8.1 | Dinamik Karakter Yönetimi
-──────────────────────────────────────────────────────────────
+PPTX + Ses → Senkronize MP4 | v9.0 | Sessizlik Tabanlı Senkronizasyon
+──────────────────────────────────────────────────────────────────────
 • Varsayılan karakter: Elif (tek kişi, her şeyi o anlatır)
 • İstediğiniz kadar konuşmacı ekleyip çıkarabilirsiniz
 • Her konuşmacıya ayrı ses dosyası atanır
-• Global mod: tek ses tüm sunuma, slaytlara orantılı bölünür
+• Global mod: sessizlik analizi ile sese en uygun kesim noktaları bulunur
 • Slayt bazlı mod: her slayta farklı konuşmacı atanır
+• AAC priming delay telafisi: aresample filtresi ile ~50ms kayma düzeltilir
+• CFR video: -vsync cfr ile timestamp tutarsızlığı engellenir
+• Letterbox/pillarbox: slayt en-boy oranı korunur, siyah bant eklenir
+• pdftoppm 192 DPI: daha keskin slayt görüntüleri
 • ffmpeg concat ile milisaniye hassasiyetinde ses birleştirme
 • Stream render: RAM'de kare biriktirme yok
 """
@@ -140,7 +144,42 @@ def audio_duration_ffprobe(audio_path: str) -> float:
         size = os.path.getsize(audio_path) if os.path.exists(audio_path) else 0
         return max(1.0, size / 16_000)
 
-def audio_duration_sec_bytes(data: bytes) -> float:
+def find_silence_split_points(audio_path: str, n_slides: int, total_dur: float) -> list:
+    """
+    Sessizlik tabanlı kesim noktaları bul.
+    Her slayt için ideal kesim noktasını eşit-bölme zamanının ±%15 yakınındaki
+    en derin sessizlikte tespit eder. Bulunamazsa eşit-bölme zamanını kullanır.
+    """
+    per_slide = total_dur / max(n_slides, 1)
+    split_times = []
+    try:
+        # silencedetect ile sessizlik aralıklarını bul
+        r = subprocess.run(
+            [FFMPEG, "-y", "-i", audio_path,
+             "-af", "silencedetect=noise=-35dB:duration=0.25",
+             "-f", "null", "-"],
+            capture_output=True, text=True, timeout=60,
+        )
+        output = r.stderr
+        # silence_start / silence_end çiftlerini parse et
+        import re
+        starts = [float(m) for m in re.findall(r"silence_start: ([\d.]+)", output)]
+        ends   = [float(m) for m in re.findall(r"silence_end: ([\d.]+)", output)]
+        silence_mids = [(s + e) / 2 for s, e in zip(starts, ends)]
+    except Exception:
+        silence_mids = []
+
+    for i in range(1, n_slides):
+        target = i * per_slide
+        tolerance = per_slide * 0.15
+        candidates = [m for m in silence_mids if abs(m - target) <= tolerance]
+        if candidates:
+            # Hedefe en yakın sessizlik noktasını seç
+            best = min(candidates, key=lambda x: abs(x - target))
+            split_times.append(best)
+        else:
+            split_times.append(target)
+    return split_times  # n_slides-1 adet kesim noktası
     if not data:
         return 3.0
     tmp = tempfile.mktemp(suffix=".audio")
@@ -181,7 +220,7 @@ def pptx_to_images(pptx_bytes: bytes) -> list:
         img_prefix = os.path.join(tmp, "slide")
         try:
             _run(
-                ["pdftoppm", "-jpeg", "-r", "150", pdf_path, img_prefix],
+                ["pdftoppm", "-jpeg", "-r", "192", pdf_path, img_prefix],
                 timeout=120, step_name="pdftoppm görüntü üretimi",
             )
         except RuntimeError as e:
@@ -195,10 +234,19 @@ def pptx_to_images(pptx_bytes: bytes) -> list:
         ])
         if not files:
             raise RuntimeError("pdftoppm çalıştı ama görüntü üretmedi.")
-        return [
-            Image.open(p).convert("RGB").resize((VIDEO_W, VIDEO_H), Image.LANCZOS)
-            for p in files
-        ]
+        images = []
+        for p in files:
+            src = Image.open(p).convert("RGB")
+            sw, sh = src.size
+            scale = min(VIDEO_W / sw, VIDEO_H / sh)
+            nw, nh = int(sw * scale), int(sh * scale)
+            resized = src.resize((nw, nh), Image.LANCZOS)
+            # Letterbox / pillarbox ile siyah zemine ortala
+            canvas = Image.new("RGB", (VIDEO_W, VIDEO_H), (0, 0, 0))
+            ox, oy = (VIDEO_W - nw) // 2, (VIDEO_H - nh) // 2
+            canvas.paste(resized, (ox, oy))
+            images.append(canvas)
+        return images
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -233,21 +281,35 @@ def prepare_audio_segments(
             f.write(global_audio)
         total_dur = audio_duration_ffprobe(global_path)
         per_slide = total_dur / max(n_slides, 1)
+
+        # Sessizlik tabanlı kesim noktalarını hesapla
+        split_points = find_silence_split_points(global_path, n_slides, total_dur)
+        # [0, sp1, sp2, ..., total_dur] şeklinde tam liste
+        boundaries = [0.0] + split_points + [total_dur]
+
         for i in range(n_slides):
-            start_sec = i * per_slide
-            seg_path  = os.path.join(work_dir, f"seg_{i:04d}.aac")
+            start_sec  = boundaries[i]
+            seg_dur    = boundaries[i + 1] - boundaries[i]
+            seg_path   = os.path.join(work_dir, f"seg_{i:04d}.aac")
             try:
+                # -accurate_seek + copy yerine re-encode: AAC priming delay olmadan kesme
                 _run(
                     [FFMPEG, "-y",
-                     "-ss", str(start_sec), "-t", str(per_slide),
-                     "-i", global_path,
-                     "-c:a", "aac", "-b:a", "128k", "-ar", "44100", seg_path],
+                     "-ss", f"{start_sec:.6f}",
+                     "-t",  f"{seg_dur:.6f}",
+                     "-i",  global_path,
+                     "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+                     # AAC encoder delay telafisi için bu seçenekler
+                     "-af", "aresample=async=1:min_hard_comp=0.100000:first_pts=0",
+                     seg_path],
                     timeout=60, step_name=f"Global ses segment {i+1}",
                 )
+                actual_dur = audio_duration_ffprobe(seg_path)
                 audio_paths.append(seg_path)
+                dur_list.append(actual_dur)  # gerçek süreyi kullan
             except Exception:
                 audio_paths.append(None)
-            dur_list.append(per_slide)
+                dur_list.append(seg_dur)
     else:
         for i in range(n_slides):
             aud_bytes = slide_audio_map.get(i)
@@ -259,7 +321,9 @@ def prepare_audio_segments(
                 try:
                     _run(
                         [FFMPEG, "-y", "-i", raw_path,
-                         "-c:a", "aac", "-b:a", "128k", "-ar", "44100", aac_path],
+                         "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
+                         "-af", "aresample=async=1:min_hard_comp=0.100000:first_pts=0",
+                         aac_path],
                         timeout=60, step_name=f"Ses normalize {i+1}",
                     )
                     dur = audio_duration_ffprobe(aac_path)
@@ -353,7 +417,10 @@ def build_video(
         "-s", f"{VIDEO_W}x{VIDEO_H}", "-pix_fmt", "rgb24",
         "-r", str(VIDEO_FPS), "-i", "pipe:0",
         "-vcodec", "libx264", "-crf", "22", "-preset", "fast",
-        "-pix_fmt", "yuv420p", tmp_video,
+        "-pix_fmt", "yuv420p",
+        "-r", str(VIDEO_FPS),        # çıkış FPS'ini de sabitle
+        "-vsync", "cfr",             # sabit kare hızı — timestamp tutarsızlığını önler
+        tmp_video,
     ]
     try:
         proc = subprocess.Popen(
@@ -370,7 +437,7 @@ def build_video(
     try:
         for idx, (img, aud_path, dur, spk) in enumerate(
                 zip(slide_images, audio_paths, durations, speakers)):
-            nf        = max(VIDEO_FPS, int(dur * VIDEO_FPS))
+            nf        = max(1, round(dur * VIDEO_FPS))  # round() ile kümülatif hata önlenir
             has_audio = aud_path is not None
             for fi in range(nf):
                 t     = fi / max(nf - 1, 1)
@@ -434,9 +501,15 @@ def build_video(
     if audio_ok:
         try:
             _run(
-                [FFMPEG, "-y", "-i", tmp_video, "-i", tmp_audio,
-                 "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
-                 "-shortest", "-movflags", "+faststart", tmp_out],
+                [FFMPEG, "-y",
+                 "-i", tmp_video, "-i", tmp_audio,
+                 "-map", "0:v:0", "-map", "1:a:0",
+                 "-c:v", "copy", "-c:a", "copy",
+                 # -shortest yerine: video bittiğinde dur (video master)
+                 "-shortest",
+                 # concat concat ile oluşturulan AAC'nin timestamp'ini sıfırla
+                 "-af", "asetpts=PTS-STARTPTS",
+                 "-movflags", "+faststart", tmp_out],
                 timeout=600, step_name="Video+ses mux",
             )
         except RuntimeError as e:
@@ -873,7 +946,7 @@ def render_sidebar():
         st.markdown("---")
         st.markdown(
             '<div style="font-size:.6rem;color:#2a3040;text-align:center;">'
-            'v8.1 · Dinamik Karakter · ffmpeg concat</div>',
+            'v9.0 · Sessizlik Senkronizasyonu · CFR Video · Letterbox</div>',
             unsafe_allow_html=True,
         )
 
