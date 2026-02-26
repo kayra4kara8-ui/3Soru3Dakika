@@ -1191,7 +1191,7 @@ def render_sidebar():
         st.caption("Kendi müziğinizi yükleyin (MP3/WAV). Yüklemezseniz otomatik medikal jingle kullanılır.")
         jcol1, jcol2 = st.columns(2)
         with jcol1:
-            st.markdown('<span style="font-size:.68rem;color:#42665a;">📥 Açılış (5sn)</span>', unsafe_allow_html=True)
+            st.markdown('<span style="font-size:.68rem;color:#42665a;">📥 Açılış (6sn)</span>', unsafe_allow_html=True)
             jf_open = st.file_uploader("Açılış jingle", type=["mp3","wav","m4a","ogg"],
                                         key="wu_jingle_open", label_visibility="collapsed")
             if jf_open is not None:
@@ -1204,7 +1204,7 @@ def render_sidebar():
                     st.session_state.ss_jingle_open = None
                     st.rerun()
         with jcol2:
-            st.markdown('<span style="font-size:.68rem;color:#42665a;">📥 Kapanış (5sn)</span>', unsafe_allow_html=True)
+            st.markdown('<span style="font-size:.68rem;color:#42665a;">📥 Kapanış (6sn)</span>', unsafe_allow_html=True)
             jf_close = st.file_uploader("Kapanış jingle", type=["mp3","wav","m4a","ogg"],
                                          key="wu_jingle_close", label_visibility="collapsed")
             if jf_close is not None:
