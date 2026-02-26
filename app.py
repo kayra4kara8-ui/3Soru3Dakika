@@ -1113,7 +1113,7 @@ def render_sidebar():
     with st.sidebar:
         st.markdown(
             '<div class="sb-brand">'
-            '<div class="sb-title">3 <em>Soru</em> 3 Dakika</div>'
+            '<div class="sb-title"><em>POL</em>CAST</div>'
             '<div class="sb-name">Eczacı <strong>Elif Aracıoğlu</strong></div>'
             '</div>',
             unsafe_allow_html=True,
@@ -1178,7 +1178,7 @@ def render_sidebar():
 # ═════════════════════════════════════════════════════════════════════════════
 def main():
     st.set_page_config(
-        page_title="3 Soru 3 Dakika · Elif Aracıoğlu",
+        page_title="POLCAST · Elif Aracıoğlu",
         page_icon="💊", layout="wide",
         initial_sidebar_state="expanded",
     )
@@ -1189,7 +1189,7 @@ def main():
     st.markdown(
         '<div class="hero">'
         '<div class="hero-pill">💊 Video Stüdyo</div>'
-        '<h1>3 <em>Soru</em><br>3 Dakika</h1>'
+        '<h1><em>POL</em>CAST</h1>'
         '<div class="hero-author">Eczacı &nbsp;<strong>Elif Aracıoğlu</strong></div>'
         '<div class="hero-rule"></div>'
         '</div>',
@@ -1332,7 +1332,7 @@ def main():
                     f'<span style="color:#2a4038;font-size:.76rem;">— {time.time()-t0:.0f}s</span>',
                     unsafe_allow_html=True)
 
-            work_dir = tempfile.mkdtemp(prefix="3soru_")
+            work_dir = tempfile.mkdtemp(prefix="polcast_")
             try:
                 cb(0.02, "Slaytlar görüntüye dönüştürülüyor…")
                 slide_imgs = pptx_to_images(st.session_state.ss_pptx_bytes)
