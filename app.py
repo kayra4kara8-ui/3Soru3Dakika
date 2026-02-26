@@ -166,73 +166,106 @@ def _make_note_file(freq: float, dur: float, work_dir: str, tag: str) -> str:
          timeout=30, step_name=f"Nota {freq}Hz")
     return out
 
+def _make_pulse(freq: float, dur: float, vol: float, out: str):
+    """Kısa, yumuşak medikal bip/nota sesi üretir."""
+    filt = (
+        f"sine=frequency={freq}:duration={dur},"
+        f"afade=t=in:st=0:d=0.008,"
+        f"afade=t=out:st={dur*0.4}:d={dur*0.55},"
+        f"volume={vol}"
+    )
+    _run([FFMPEG, "-y", "-f", "lavfi", "-i", filt,
+          "-t", str(dur), "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", out],
+         timeout=30, step_name=f"Nota {freq}Hz")
+
 def make_jingle(work_dir: str, kind: str = "open") -> str:
     """
-    kind='open'  → yükselen medikal arpej + fade-in
-    kind='close' → inen medikal arpej + fade-out
+    kind='open'  → EKG bipleri + yükselen medikal arpej (C5→E5→G5→C6)
+    kind='close' → inen medikal arpej (C6→G5→E5→C5) + son bip
     Çıktı: 5 saniyelik AAC dosyası yolu
+
+    Medikal ses tasarımı:
+    • 880Hz kısa bip = klinik monitör sesi
+    • Yükselen/inen arpej = güven, sağlık, profesyonellik hissi
+    • Tüm sesler ffmpeg lavfi ile sıfırdan sentezlenir — dış dosya gerekmez
     """
     out_path = os.path.join(work_dir, f"jingle_{kind}.aac")
 
     if kind == "open":
-        # Yükselen: C5 → E5 → G5 → C6, son nota uzun
-        notes = [
-            (523.2,  0,    0.45),
-            (659.3,  380,  0.45),
-            (783.9,  760,  0.45),
-            (1046.5, 1200, 2.2),
+        # Açılış: 3 EKG bipi → yükselen arpej → uzun son nota
+        bip1 = os.path.join(work_dir, "jop_bip1.aac")
+        bip2 = os.path.join(work_dir, "jop_bip2.aac")
+        bip3 = os.path.join(work_dir, "jop_bip3.aac")
+        n1   = os.path.join(work_dir, "jop_n1.aac")
+        n2   = os.path.join(work_dir, "jop_n2.aac")
+        n3   = os.path.join(work_dir, "jop_n3.aac")
+        n4   = os.path.join(work_dir, "jop_n4.aac")
+        _make_pulse(880,    0.12, 0.38, bip1)
+        _make_pulse(880,    0.12, 0.38, bip2)
+        _make_pulse(880,    0.12, 0.38, bip3)
+        _make_pulse(523.2,  0.48, 0.34, n1)   # C5
+        _make_pulse(659.3,  0.48, 0.34, n2)   # E5
+        _make_pulse(783.9,  0.48, 0.34, n3)   # G5
+        _make_pulse(1046.5, 2.0,  0.38, n4)   # C6 uzun
+        parts = [
+            (bip1, 0),
+            (bip2, 600),
+            (bip3, 1200),
+            (n1,   1800),
+            (n2,   2220),
+            (n3,   2640),
+            (n4,   3080),
         ]
-        vol = 3.0
-        fade_out_start = 4.2
+        fade_out_at = 4.3
+
     else:
-        # İnen: C6 → G5 → E5 → C5, bitiş uzun
-        notes = [
-            (1046.5, 0,    0.45),
-            (783.9,  420,  0.45),
-            (659.3,  840,  0.45),
-            (523.2,  1300, 2.0),
+        # Kapanış: inen arpej → uzun son nota → son bip
+        c1  = os.path.join(work_dir, "jcl_c1.aac")
+        c2  = os.path.join(work_dir, "jcl_c2.aac")
+        c3  = os.path.join(work_dir, "jcl_c3.aac")
+        c4  = os.path.join(work_dir, "jcl_c4.aac")
+        cb1 = os.path.join(work_dir, "jcl_cb1.aac")
+        _make_pulse(1046.5, 0.48, 0.36, c1)   # C6
+        _make_pulse(783.9,  0.48, 0.36, c2)   # G5
+        _make_pulse(659.3,  0.48, 0.36, c3)   # E5
+        _make_pulse(523.2,  2.2,  0.38, c4)   # C5 uzun
+        _make_pulse(880,    0.12, 0.28, cb1)  # son bip
+        parts = [
+            (c1,   0),
+            (c2,   450),
+            (c3,   900),
+            (c4,   1380),
+            (cb1,  3800),
         ]
-        vol = 3.0
-        fade_out_start = 4.0
+        fade_out_at = 4.2
 
-    note_files = []
-    for freq, delay_ms, dur in notes:
-        tag = f"{kind}_{int(freq)}_{delay_ms}"
-        nf = _make_note_file(freq, dur, work_dir, tag)
-        note_files.append((nf, delay_ms))
-
-    # Hepsini adelay ile karıştır
+    # Tüm parçaları adelay ile karıştır
     in_args = []
-    for path, _ in note_files:
+    for path, _ in parts:
         in_args += ["-i", path]
-
-    n = len(note_files)
+    n = len(parts)
     fp = []
-    for i, (_, delay_ms) in enumerate(note_files):
+    for i, (_, delay_ms) in enumerate(parts):
         fp.append(f"[{i}]adelay={delay_ms}|{delay_ms}[d{i}]")
     fp.append(f"{''.join(f'[d{i}]' for i in range(n))}amix=inputs={n}:normalize=0[mix]")
+    fp.append(
+        f"[mix]afade=t=in:st=0:d=0.1,"
+        f"afade=t=out:st={fade_out_at}:d={JINGLE_DUR - fade_out_at},"
+        f"volume=3.2[out]"
+    )
 
-    if kind == "open":
-        fp.append(
-            f"[mix]afade=t=in:st=0:d=0.3,"
-            f"afade=t=out:st={fade_out_start}:d=0.8,"
-            f"volume={vol}[out]"
-        )
-    else:
-        fp.append(
-            f"[mix]afade=t=in:st=0:d=0.05,"
-            f"afade=t=out:st={fade_out_start}:d=1.0,"
-            f"volume={vol}[out]"
-        )
-
-    _run([FFMPEG, "-y",
-          *in_args,
+    _run([FFMPEG, "-y", *in_args,
           "-filter_complex", ";".join(fp),
           "-map", "[out]",
           "-t", str(JINGLE_DUR),
           "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
           out_path],
          timeout=60, step_name=f"Jingle {kind}")
+
+    # Geçici nota dosyalarını temizle
+    for path, _ in parts:
+        try: os.unlink(path)
+        except: pass
 
     return out_path
 
