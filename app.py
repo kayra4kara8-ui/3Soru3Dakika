@@ -62,7 +62,7 @@ SLIDE_AREA_H = VIDEO_H - TOP_BAR - BOT_BAR
 SLIDE_AREA_W = VIDEO_W
 BRAND_RGB = (52, 168, 131)
 BRAND_HEX = "34A883"
-JINGLE_DUR = 5.0   # saniye
+JINGLE_DUR = 6.0   # saniye
 
 FONT_PATHS = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
