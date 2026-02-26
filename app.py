@@ -701,14 +701,7 @@ def render_frame(slide_img, slide_idx, total, t, speaker, has_audio):
     cx = wi // 2 + 80
     draw.ellipse([cx-6, dot_cy-6, cx+6, dot_cy+6], fill=(210, 55, 55, da))
     draw.text((cx+12, dot_cy-7), "CANLI", font=fn11, fill=(210, 55, 55, 210))
-    brand_text = "Eczacı Elif Aracıoglu"
-    try:
-        btw = draw.textlength(brand_text, font=fn11)
-    except:
-        btw = len(brand_text) * 6
-    bx = wi - int(btw) - 28
-    _draw_speaker_dot(draw, bx-8, dot_cy, 5, color)
-    draw.text((bx, dot_cy-7), brand_text, font=fn11, fill=(*color, 145))
+
 
     # Alt bant
     bot_y = hi - BOT_BAR
