@@ -166,110 +166,154 @@ def _make_note_file(freq: float, dur: float, work_dir: str, tag: str) -> str:
          timeout=30, step_name=f"Nota {freq}Hz")
     return out
 
-def _make_pulse(freq: float, dur: float, vol: float, out: str):
-    """Kısa, yumuşak medikal bip/nota sesi üretir."""
-    filt = (
-        f"sine=frequency={freq}:duration={dur},"
-        f"afade=t=in:st=0:d=0.008,"
-        f"afade=t=out:st={dur*0.4}:d={dur*0.55},"
-        f"volume={vol}"
-    )
+def _save_af(filt: str, dur: float, out: str):
+    """lavfi filtresini AAC dosyasına yaz."""
     _run([FFMPEG, "-y", "-f", "lavfi", "-i", filt,
-          "-t", str(dur), "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", out],
-         timeout=30, step_name=f"Nota {freq}Hz")
+          "-t", str(dur), "-c:a", "aac", "-b:a", "128k",
+          "-ar", "44100", "-ac", "2", out],
+         timeout=30, step_name=f"Ses katmanı")
 
-def make_jingle(work_dir: str, kind: str = "open") -> str:
+def _mix_layers(parts: list, out: str, total_dur: float,
+                vol: float = 2.8, fade_in: float = 0.12, fade_out_at: float = None):
     """
-    kind='open'  → EKG bipleri + yükselen medikal arpej (C5→E5→G5→C6)
-    kind='close' → inen medikal arpej (C6→G5→E5→C5) + son bip
-    Çıktı: 5 saniyelik AAC dosyası yolu
-
-    Medikal ses tasarımı:
-    • 880Hz kısa bip = klinik monitör sesi
-    • Yükselen/inen arpej = güven, sağlık, profesyonellik hissi
-    • Tüm sesler ffmpeg lavfi ile sıfırdan sentezlenir — dış dosya gerekmez
+    parts: [(dosya_yolu, delay_ms), ...]
+    Hepsini adelay ile karıştır, fade uygula.
     """
-    out_path = os.path.join(work_dir, f"jingle_{kind}.aac")
-
-    if kind == "open":
-        # Açılış: 3 EKG bipi → yükselen arpej → uzun son nota
-        bip1 = os.path.join(work_dir, "jop_bip1.aac")
-        bip2 = os.path.join(work_dir, "jop_bip2.aac")
-        bip3 = os.path.join(work_dir, "jop_bip3.aac")
-        n1   = os.path.join(work_dir, "jop_n1.aac")
-        n2   = os.path.join(work_dir, "jop_n2.aac")
-        n3   = os.path.join(work_dir, "jop_n3.aac")
-        n4   = os.path.join(work_dir, "jop_n4.aac")
-        _make_pulse(880,    0.12, 0.38, bip1)
-        _make_pulse(880,    0.12, 0.38, bip2)
-        _make_pulse(880,    0.12, 0.38, bip3)
-        _make_pulse(523.2,  0.48, 0.34, n1)   # C5
-        _make_pulse(659.3,  0.48, 0.34, n2)   # E5
-        _make_pulse(783.9,  0.48, 0.34, n3)   # G5
-        _make_pulse(1046.5, 2.0,  0.38, n4)   # C6 uzun
-        parts = [
-            (bip1, 0),
-            (bip2, 600),
-            (bip3, 1200),
-            (n1,   1800),
-            (n2,   2220),
-            (n3,   2640),
-            (n4,   3080),
-        ]
-        fade_out_at = 4.3
-
-    else:
-        # Kapanış: inen arpej → uzun son nota → son bip
-        c1  = os.path.join(work_dir, "jcl_c1.aac")
-        c2  = os.path.join(work_dir, "jcl_c2.aac")
-        c3  = os.path.join(work_dir, "jcl_c3.aac")
-        c4  = os.path.join(work_dir, "jcl_c4.aac")
-        cb1 = os.path.join(work_dir, "jcl_cb1.aac")
-        _make_pulse(1046.5, 0.48, 0.36, c1)   # C6
-        _make_pulse(783.9,  0.48, 0.36, c2)   # G5
-        _make_pulse(659.3,  0.48, 0.36, c3)   # E5
-        _make_pulse(523.2,  2.2,  0.38, c4)   # C5 uzun
-        _make_pulse(880,    0.12, 0.28, cb1)  # son bip
-        parts = [
-            (c1,   0),
-            (c2,   450),
-            (c3,   900),
-            (c4,   1380),
-            (cb1,  3800),
-        ]
-        fade_out_at = 4.2
-
-    # Tüm parçaları adelay ile karıştır
+    fo = fade_out_at if fade_out_at else (total_dur - 0.7)
     in_args = []
     for path, _ in parts:
         in_args += ["-i", path]
     n = len(parts)
     fp = []
-    for i, (_, delay_ms) in enumerate(parts):
-        fp.append(f"[{i}]adelay={delay_ms}|{delay_ms}[d{i}]")
+    for i, (_, d) in enumerate(parts):
+        fp.append(f"[{i}]adelay={d}|{d}[d{i}]")
     fp.append(f"{''.join(f'[d{i}]' for i in range(n))}amix=inputs={n}:normalize=0[mix]")
     fp.append(
-        f"[mix]afade=t=in:st=0:d=0.1,"
-        f"afade=t=out:st={fade_out_at}:d={JINGLE_DUR - fade_out_at},"
-        f"volume=3.2[out]"
+        f"[mix]afade=t=in:st=0:d={fade_in},"
+        f"afade=t=out:st={fo}:d={total_dur - fo},"
+        f"volume={vol}[out]"
     )
-
     _run([FFMPEG, "-y", *in_args,
           "-filter_complex", ";".join(fp),
           "-map", "[out]",
-          "-t", str(JINGLE_DUR),
-          "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
-          out_path],
-         timeout=60, step_name=f"Jingle {kind}")
+          "-t", str(total_dur),
+          "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", out],
+         timeout=60, step_name="Jingle mix")
 
-    # Geçici nota dosyalarını temizle
+def make_jingle(work_dir: str, kind: str = "open") -> str:
+    """
+    Katmanlı medikal ses tasarımı — dış dosya gerekmez, sıfırdan sentez:
+
+    AÇILIŞ (open):
+      • Katman 1 — Whoosh rise: brown noise → yüksek geçiş filtresi → fade-in sweep
+      • Katman 2 — Synth pad: C4+E4+G4 major akoru + chorus → sıcak, yumuşak zemin
+      • Katman 3 — Digital pulse: 120 BPM ritmik elektronik atış (kalp benzeri)
+      • Katman 4 — Yükselen arpej: C5→E5→G5→C6 crescendo ile bitiş
+
+    KAPANIŞ (close):
+      • Katman 1 — Whoosh down: tersine brown noise → alçalan sweep
+      • Katman 2 — Synth pad: aynı akoru yavaşça söndür
+      • Katman 3 — Tek beat: kapanış işareti
+      • Katman 4 — İnen arpej: C6→G5→E5→C5 + son uzun nota
+    """
+    out_path = os.path.join(work_dir, f"jingle_{kind}.aac")
+    d = work_dir  # kısaltma
+
+    # ── Ortak katmanlar ──────────────────────────────────────────────────────
+
+    # Whoosh: brown noise bandpass → yükselen süpürme hissi
+    whoosh = os.path.join(d, f"j_{kind}_whoosh.aac")
+    _save_af(
+        "anoisesrc=color=brown:duration=5,"
+        "highpass=f=80,highpass=f=80,"
+        "lowpass=f=3000,"
+        "afade=t=in:st=0:d=2.2,"
+        "afade=t=out:st=3.6:d=1.4,"
+        "volume=0.14",
+        5.0, whoosh
+    )
+
+    # Synth pad: C4 + E4 + G4 major akoru, chorus ile yumuşatılmış
+    pad_c = os.path.join(d, f"j_{kind}_pc.aac")
+    pad_e = os.path.join(d, f"j_{kind}_pe.aac")
+    pad_g = os.path.join(d, f"j_{kind}_pg.aac")
+    _save_af("sine=frequency=261.6:duration=5,chorus=0.5:0.9:50|60:0.3|0.3:0.2|0.3:2|1.5,volume=0.17", 5.0, pad_c)
+    _save_af("sine=frequency=329.6:duration=5,chorus=0.5:0.9:55|65:0.3|0.3:0.2|0.3:2|1.5,volume=0.13", 5.0, pad_e)
+    _save_af("sine=frequency=392.0:duration=5,chorus=0.5:0.9:45|55:0.3|0.3:0.2|0.3:2|1.5,volume=0.11", 5.0, pad_g)
+
+    # Digital pulse (elektronik kalp atışı, 120 BPM)
+    beat_lo = os.path.join(d, f"j_{kind}_blo.aac")
+    beat_hi = os.path.join(d, f"j_{kind}_bhi.aac")
+    _save_af("sine=frequency=180:duration=0.08,afade=t=in:st=0:d=0.005,afade=t=out:st=0.04:d=0.04,volume=0.48", 0.08, beat_lo)
+    _save_af("sine=frequency=120:duration=0.12,afade=t=in:st=0:d=0.005,afade=t=out:st=0.05:d=0.07,volume=0.28", 0.12, beat_hi)
+
+    if kind == "open":
+        # Yükselen arpej notaları
+        arp1 = os.path.join(d, "jop_a1.aac")
+        arp2 = os.path.join(d, "jop_a2.aac")
+        arp3 = os.path.join(d, "jop_a3.aac")
+        arp4 = os.path.join(d, "jop_a4.aac")
+        _save_af("sine=frequency=523.2:duration=0.42,afade=t=in:st=0:d=0.02,afade=t=out:st=0.27:d=0.15,volume=0.30", 0.42, arp1)
+        _save_af("sine=frequency=659.3:duration=0.42,afade=t=in:st=0:d=0.02,afade=t=out:st=0.27:d=0.15,volume=0.30", 0.42, arp2)
+        _save_af("sine=frequency=783.9:duration=0.42,afade=t=in:st=0:d=0.02,afade=t=out:st=0.27:d=0.15,volume=0.30", 0.42, arp3)
+        _save_af("sine=frequency=1046.5:duration=1.9,afade=t=in:st=0:d=0.06,afade=t=out:st=1.3:d=0.6,volume=0.36", 1.9, arp4)
+
+        parts = [
+            (whoosh,  0),     # arka plan sweep başlar
+            (pad_c,   180),   # pad yavaşça girer
+            (pad_e,   180),
+            (pad_g,   180),
+            (beat_lo, 0),     # beat 1
+            (beat_hi, 80),
+            (beat_lo, 500),   # beat 2
+            (beat_hi, 580),
+            (beat_lo, 1000),  # beat 3
+            (beat_hi, 1080),
+            (beat_lo, 1500),  # beat 4
+            (beat_hi, 1580),
+            (arp1,    2000),  # C5
+            (arp2,    2430),  # E5
+            (arp3,    2860),  # G5
+            (arp4,    3320),  # C6 uzun — crescendo
+        ]
+        _mix_layers(parts, out_path, 5.0, vol=2.9, fade_in=0.15, fade_out_at=4.35)
+
+    else:  # close
+        # İnen arpej notaları
+        car1 = os.path.join(d, "jcl_a1.aac")
+        car2 = os.path.join(d, "jcl_a2.aac")
+        car3 = os.path.join(d, "jcl_a3.aac")
+        car4 = os.path.join(d, "jcl_a4.aac")
+        cbip = os.path.join(d, "jcl_bip.aac")
+        _save_af("sine=frequency=1046.5:duration=0.42,afade=t=in:st=0:d=0.02,afade=t=out:st=0.27:d=0.15,volume=0.30", 0.42, car1)
+        _save_af("sine=frequency=783.9:duration=0.42,afade=t=in:st=0:d=0.02,afade=t=out:st=0.27:d=0.15,volume=0.30", 0.42, car2)
+        _save_af("sine=frequency=659.3:duration=0.42,afade=t=in:st=0:d=0.02,afade=t=out:st=0.27:d=0.15,volume=0.30", 0.42, car3)
+        _save_af("sine=frequency=523.2:duration=2.4,afade=t=in:st=0:d=0.08,afade=t=out:st=1.7:d=0.7,volume=0.34", 2.4, car4)
+        _save_af("sine=frequency=880:duration=0.14,afade=t=in:st=0:d=0.005,afade=t=out:st=0.07:d=0.07,volume=0.28", 0.14, cbip)
+
+        parts = [
+            (pad_c,   0),     # pad hemen
+            (pad_e,   0),
+            (pad_g,   0),
+            (whoosh,  0),     # hafif whoosh arka planda
+            (beat_lo, 150),   # tek beat — kapanış işareti
+            (beat_hi, 230),
+            (car1,    750),   # C6 inen
+            (car2,    1200),  # G5
+            (car3,    1650),  # E5
+            (car4,    2100),  # C5 uzun
+            (cbip,    4050),  # son bip
+        ]
+        _mix_layers(parts, out_path, 5.0, vol=2.9, fade_in=0.10, fade_out_at=4.25)
+
+    # Geçici dosyaları temizle
     for path, _ in parts:
         try: os.unlink(path)
         except: pass
 
     return out_path
 
-# ═════════════════════════════════════════════════════════════════════════════
+# =============================================================================
 # AÇILIŞ / KAPANIŞ KARESI RENDER
 # ═════════════════════════════════════════════════════════════════════════════
 def render_intro_frame(t: float, kind: str, color=BRAND_RGB) -> np.ndarray:
