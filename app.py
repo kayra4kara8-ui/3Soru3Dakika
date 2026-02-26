@@ -166,6 +166,34 @@ def _make_note_file(freq: float, dur: float, work_dir: str, tag: str) -> str:
          timeout=30, step_name=f"Nota {freq}Hz")
     return out
 
+def _prepare_user_jingle(audio_bytes: bytes, work_dir: str, kind: str) -> str:
+    """
+    Kullanıcının yüklediği MP3/WAV'ı jingle olarak hazırla:
+    • İlk 5 saniyeyi al (JINGLE_DUR)
+    • Fade-in (açılış) veya fade-out (kapanış) uygula
+    • AAC 192k çıktı
+    """
+    raw = os.path.join(work_dir, f"user_jingle_{kind}_raw.audio")
+    out = os.path.join(work_dir, f"user_jingle_{kind}.aac")
+    with open(raw, "wb") as f:
+        f.write(audio_bytes)
+
+    if kind == "open":
+        af_chain = f"afade=t=in:st=0:d=0.5,afade=t=out:st={JINGLE_DUR-0.6}:d=0.6,volume=1.0"
+    else:
+        af_chain = f"afade=t=in:st=0:d=0.3,afade=t=out:st={JINGLE_DUR-0.8}:d=0.8,volume=1.0"
+
+    _run([
+        FFMPEG, "-y",
+        "-i", raw,
+        "-t", str(JINGLE_DUR),
+        "-af", af_chain,
+        "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+        out,
+    ], timeout=60, step_name=f"Kullanıcı jingle ({kind})")
+    return out
+
+
 def _save_af(filt: str, dur: float, out: str):
     """lavfi filtresini AAC dosyasına yaz."""
     _run([FFMPEG, "-y", "-f", "lavfi", "-i", filt,
@@ -656,7 +684,8 @@ def _concat_videos(parts: list, out_path: str, work_dir: str):
         "-c", "copy", "-movflags", "+faststart", out_path,
     ], timeout=600, step_name="Concat")
 
-def build_video(slide_images, audio_paths, seek_starts, durations, speakers, work_dir, cb=None):
+def build_video(slide_images, audio_paths, seek_starts, durations, speakers, work_dir, cb=None,
+                jingle_open: bytes | None = None, jingle_close: bytes | None = None):
     if not FFMPEG or not os.path.exists(FFMPEG):
         raise RuntimeError("ffmpeg bulunamadı!")
 
@@ -677,8 +706,12 @@ def build_video(slide_images, audio_paths, seek_starts, durations, speakers, wor
     _pipe_frames_to_file(intro_frames(), jingle_nf, intro_vid)
 
     # ── 2. Açılış ses (jingle müziği) ─────────────────────────────────────
-    if cb: cb(0.08, "Açılış jingle sesi sentezleniyor…")
-    intro_audio = make_jingle(work_dir, "open")
+    if jingle_open:
+        if cb: cb(0.08, "Açılış jingle hazırlanıyor (yüklenen müzik)…")
+        intro_audio = _prepare_user_jingle(jingle_open, work_dir, "open")
+    else:
+        if cb: cb(0.08, "Açılış jingle sesi sentezleniyor…")
+        intro_audio = make_jingle(work_dir, "open")
 
     # ── 3. Açılış mux ─────────────────────────────────────────────────────
     intro_muxed = os.path.join(work_dir, "intro_muxed.mp4")
@@ -718,8 +751,12 @@ def build_video(slide_images, audio_paths, seek_starts, durations, speakers, wor
     _pipe_frames_to_file(outro_frames(), jingle_nf, outro_vid)
 
     # ── 7. Kapanış sesi ────────────────────────────────────────────────────
-    if cb: cb(0.87, "Kapanış jingle sesi sentezleniyor…")
-    outro_audio = make_jingle(work_dir, "close")
+    if jingle_close:
+        if cb: cb(0.87, "Kapanış jingle hazırlanıyor (yüklenen müzik)…")
+        outro_audio = _prepare_user_jingle(jingle_close, work_dir, "close")
+    else:
+        if cb: cb(0.87, "Kapanış jingle sesi sentezleniyor…")
+        outro_audio = make_jingle(work_dir, "close")
     outro_muxed = os.path.join(work_dir, "outro_muxed.mp4")
     _mux(outro_vid, outro_audio, outro_muxed)
 
@@ -890,6 +927,8 @@ def init_state():
         "ss_use_global":    True,
         "ss_video_bytes":   None,
         "ss_characters":    [c.copy() for c in DEFAULT_CHARACTERS],
+        "ss_jingle_open":   None,
+        "ss_jingle_close":  None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1147,7 +1186,38 @@ def render_sidebar():
                 f'{ch["role"]}</span></div>',
                 unsafe_allow_html=True)
         st.markdown("---")
-        # Bant bilgisi
+        # ── Jingle yükleme ───────────────────────────────────────────────────
+        st.markdown('<p class="lbl">🎵 Açılış / Kapanış Jingle</p>', unsafe_allow_html=True)
+        st.caption("Kendi müziğinizi yükleyin (MP3/WAV). Yüklemezseniz otomatik medikal jingle kullanılır.")
+        jcol1, jcol2 = st.columns(2)
+        with jcol1:
+            st.markdown('<span style="font-size:.68rem;color:#42665a;">📥 Açılış (5sn)</span>', unsafe_allow_html=True)
+            jf_open = st.file_uploader("Açılış jingle", type=["mp3","wav","m4a","ogg"],
+                                        key="wu_jingle_open", label_visibility="collapsed")
+            if jf_open is not None:
+                st.session_state.ss_jingle_open = jf_open.read()
+                st.audio(st.session_state.ss_jingle_open, format="audio/mp3")
+            elif st.session_state.get("ss_jingle_open"):
+                st.audio(st.session_state.ss_jingle_open, format="audio/mp3")
+            if st.session_state.get("ss_jingle_open"):
+                if st.button("✕ Kaldır", key="wu_jopen_del", use_container_width=True):
+                    st.session_state.ss_jingle_open = None
+                    st.rerun()
+        with jcol2:
+            st.markdown('<span style="font-size:.68rem;color:#42665a;">📥 Kapanış (5sn)</span>', unsafe_allow_html=True)
+            jf_close = st.file_uploader("Kapanış jingle", type=["mp3","wav","m4a","ogg"],
+                                         key="wu_jingle_close", label_visibility="collapsed")
+            if jf_close is not None:
+                st.session_state.ss_jingle_close = jf_close.read()
+                st.audio(st.session_state.ss_jingle_close, format="audio/mp3")
+            elif st.session_state.get("ss_jingle_close"):
+                st.audio(st.session_state.ss_jingle_close, format="audio/mp3")
+            if st.session_state.get("ss_jingle_close"):
+                if st.button("✕ Kaldır", key="wu_jclose_del", use_container_width=True):
+                    st.session_state.ss_jingle_close = None
+                    st.rerun()
+        st.markdown("---")
+        # ── Bant bilgisi ───────────────────────────────────────────────────────
         st.markdown(
             f'<div style="font-size:.6rem;color:#2a4038;line-height:1.7;">'
             f'📐 Video: {VIDEO_W}×{VIDEO_H} · {VIDEO_FPS}fps<br>'
@@ -1345,13 +1415,15 @@ def main():
                     for i in range(n_actual)
                 ]
                 video_bytes = build_video(
-                    slide_images = slide_imgs,
-                    audio_paths  = audio_paths,
-                    seek_starts  = seek_starts,
-                    durations    = dur_list,
-                    speakers     = slide_speakers,
-                    work_dir     = work_dir,
-                    cb           = cb,
+                    slide_images  = slide_imgs,
+                    audio_paths   = audio_paths,
+                    seek_starts   = seek_starts,
+                    durations     = dur_list,
+                    speakers      = slide_speakers,
+                    work_dir      = work_dir,
+                    cb            = cb,
+                    jingle_open   = st.session_state.get("ss_jingle_open"),
+                    jingle_close  = st.session_state.get("ss_jingle_close"),
                 )
                 st.session_state.ss_video_bytes  = video_bytes
                 st.session_state.ss_slide_images = slide_imgs
