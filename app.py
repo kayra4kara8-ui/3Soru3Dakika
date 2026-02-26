@@ -64,7 +64,9 @@ SLIDE_AREA_H = VIDEO_H - TOP_BAR - BOT_BAR
 SLIDE_AREA_W = VIDEO_W
 BRAND_RGB = (52, 168, 131)
 BRAND_HEX = "34A883"
-JINGLE_DUR = 5.0
+JINGLE_OPEN_DUR  = 8.0   # Açılış jingle süresi (saniye)
+JINGLE_CLOSE_DUR = 7.0   # Kapanış jingle süresi (saniye)
+JINGLE_DUR = JINGLE_OPEN_DUR  # geriye dönük uyumluluk için
 
 FONT_PATHS = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -168,11 +170,24 @@ def clean_audio(inp: str, out: str, step: str = "Ses temizleme"):
 
 def make_jingle(work_dir: str, kind: str = "open") -> str:
     """
-    Profesyonel medikal jingle — tamamen ffmpeg lavfi sentezi, dış dosya yok.
-    """
-    out_path = os.path.join(work_dir, f"jingle_{kind}.aac")
+    Profesyonel medikal jingle — 8sn açılış / 7sn kapanış
+    Tamamen ffmpeg lavfi sentezi, dış dosya yok.
 
-    # Yardımcı: lavfi filter → AAC
+    AÇILIŞ (8sn) — 4 bölüm:
+      0.0–1.5s  Uyanış   : Derin whoosh + alçak pad yavaşça açılır
+      1.5–3.5s  Nabız    : EKG ritmi (72 BPM) + diapason 440 Hz
+      3.5–6.0s  Yükseliş : Çift oktav arpej C4→C5→C6 crescendo
+      6.0–8.0s  Doruk    : Uzun C6 tonu + harmonik + yumuşak kapanış
+
+    KAPANIŞ (7sn) — 3 bölüm:
+      0.0–2.0s  Açılış   : Pad + yavaşlayan EKG × 3
+      2.0–5.0s  İniş     : Çift oktav inen arpej C6→C5→C4
+      5.0–7.0s  Kapanış  : Medikal onay çifti + son nefes + fade
+    """
+    out_path  = os.path.join(work_dir, f"jingle_{kind}.aac")
+    total_dur = JINGLE_OPEN_DUR if kind == "open" else JINGLE_CLOSE_DUR
+
+    # ── Yardımcı: lavfi filter → AAC ─────────────────────────────────────
     def _af(filt: str, dur: float, fname: str) -> str:
         p = os.path.join(work_dir, fname)
         subprocess.run(
@@ -183,156 +198,303 @@ def make_jingle(work_dir: str, kind: str = "open") -> str:
         )
         return p
 
-    # EKG bip — 880 Hz, 60 ms klinik monitor sesi
+    # ── EKG bip — 880 Hz klinik monitor ──────────────────────────────────
     def _ekg(tag: str, vol: float = 0.55) -> str:
         return _af(
-            f"sine=frequency=880:duration=0.06,"
-            f"afade=t=in:st=0:d=0.004,"
-            f"afade=t=out:st=0.025:d=0.035,"
+            f"sine=frequency=880:duration=0.07,"
+            f"afade=t=in:st=0:d=0.005,"
+            f"afade=t=out:st=0.028:d=0.042,"
             f"volume={vol}",
-            0.06, f"ekg_{tag}.aac"
+            0.07, f"ekg_{tag}.aac"
         )
 
-    # P dalgası simülasyonu — 660 Hz, 30 ms
+    # ── P dalgası — 660 Hz ────────────────────────────────────────────────
     def _pw(tag: str) -> str:
         return _af(
-            "sine=frequency=660:duration=0.03,"
-            "afade=t=in:st=0:d=0.003,"
-            "afade=t=out:st=0.012:d=0.018,"
-            "volume=0.18",
-            0.03, f"pw_{tag}.aac"
+            "sine=frequency=660:duration=0.04,"
+            "afade=t=in:st=0:d=0.004,"
+            "afade=t=out:st=0.016:d=0.024,"
+            "volume=0.16",
+            0.04, f"pw_{tag}.aac"
         )
 
-    # Ortak katmanlar
+    # ── Tek nota ──────────────────────────────────────────────────────────
+    def _note(freq: float, dur: float, vol: float, tag: str) -> str:
+        fo_st = dur * 0.62
+        fo_d  = dur - fo_st
+        return _af(
+            f"sine=frequency={freq}:duration={dur},"
+            f"afade=t=in:st=0:d=0.018,"
+            f"afade=t=out:st={fo_st:.3f}:d={fo_d:.3f},"
+            f"volume={vol}",
+            dur, f"note_{tag}.aac"
+        )
+
+    # ════════════════════════════════════════════════════════════════════
+    # ORTAK KATMANLAR (her iki jingle için)
+    # ════════════════════════════════════════════════════════════════════
+
+    # Uzun whoosh — tüm jingle boyunca atmosfer
     whoosh = _af(
-        "anoisesrc=color=brown:duration=5,"
-        "highpass=f=200,"
-        "lowpass=f=2200,"
-        "afade=t=in:st=0:d=1.8,"
-        "afade=t=out:st=3.2:d=1.8,"
-        "volume=0.09",
-        5.0, f"whoosh_{kind}.aac"
+        f"anoisesrc=color=brown:duration={total_dur},"
+        "highpass=f=180,"
+        "lowpass=f=2800,"
+        f"afade=t=in:st=0:d=2.2,"
+        f"afade=t=out:st={total_dur-2.0}:d=2.0,"
+        "volume=0.07",
+        total_dur, f"whoosh_{kind}.aac"
     )
+
+    # Sub bass — derin zemin tonu (C1 = 32.7 Hz)
+    sub = _af(
+        f"sine=frequency=65.4:duration={total_dur},"
+        f"afade=t=in:st=0:d=2.5,"
+        f"afade=t=out:st={total_dur-2.0}:d=2.0,"
+        "volume=0.22",
+        total_dur, f"sub_{kind}.aac"
+    )
+
+    # Steril pad katmanları — C2+G2+E3 (tüm süre)
     pad_c = _af(
-        "sine=frequency=130.8:duration=5,"
-        "chorus=0.4:0.8:45|55:0.25|0.25:0.18|0.22:2|1.5,"
-        "volume=0.19",
-        5.0, f"pad_c_{kind}.aac"
+        f"sine=frequency=130.8:duration={total_dur},"
+        "chorus=0.45:0.9:48|58:0.28|0.28:0.20|0.24:2.2|1.6,"
+        f"afade=t=in:st=0:d=2.0,"
+        f"afade=t=out:st={total_dur-1.8}:d=1.8,"
+        "volume=0.20",
+        total_dur, f"pad_c_{kind}.aac"
     )
     pad_g = _af(
-        "sine=frequency=196.0:duration=5,"
-        "chorus=0.4:0.8:50|60:0.25|0.25:0.18|0.22:2|1.5,"
-        "volume=0.15",
-        5.0, f"pad_g_{kind}.aac"
+        f"sine=frequency=196.0:duration={total_dur},"
+        "chorus=0.45:0.9:52|62:0.28|0.28:0.20|0.24:2.2|1.6,"
+        f"afade=t=in:st=0.3:d=1.8,"
+        f"afade=t=out:st={total_dur-1.8}:d=1.8,"
+        "volume=0.16",
+        total_dur, f"pad_g_{kind}.aac"
     )
     pad_e = _af(
-        "sine=frequency=329.6:duration=5,"
-        "chorus=0.4:0.8:40|50:0.25|0.25:0.18|0.22:2|1.5,"
-        "volume=0.12",
-        5.0, f"pad_e_{kind}.aac"
+        f"sine=frequency=329.6:duration={total_dur},"
+        "chorus=0.45:0.9:44|54:0.28|0.28:0.20|0.24:2.2|1.6,"
+        f"afade=t=in:st=0.6:d=1.5,"
+        f"afade=t=out:st={total_dur-1.8}:d=1.8,"
+        "volume=0.13",
+        total_dur, f"pad_e_{kind}.aac"
     )
+
+    # Parlak üst pad — E4+G4 (yüksek frekans parlaklık)
+    pad_hi = _af(
+        f"sine=frequency=659.3:duration={total_dur},"
+        "chorus=0.3:0.7:38|48:0.22|0.22:0.15|0.18:1.8|1.3,"
+        f"afade=t=in:st=1.5:d=1.8,"
+        f"afade=t=out:st={total_dur-2.2}:d=2.0,"
+        "volume=0.07",
+        total_dur, f"pad_hi_{kind}.aac"
+    )
+
+    # Diapason — 440 Hz A referans tonu
     diapason = _af(
-        "sine=frequency=440:duration=0.6,"
-        "afade=t=in:st=0:d=0.04,"
-        "afade=t=out:st=0.35:d=0.25,"
-        "volume=0.28",
-        0.6, f"diapason_{kind}.aac"
+        "sine=frequency=440:duration=0.8,"
+        "afade=t=in:st=0:d=0.05,"
+        "afade=t=out:st=0.5:d=0.3,"
+        "volume=0.30",
+        0.8, f"diapason_{kind}.aac"
     )
 
+    # ════════════════════════════════════════════════════════════════════
+    # AÇILIŞ — 8 saniye
+    # ════════════════════════════════════════════════════════════════════
     if kind == "open":
-        # EKG ritmi: 72 BPM — P dalgası + QRS × 4
-        e1, e2, e3, e4 = _ekg("o1", 0.42), _ekg("o2", 0.48), _ekg("o3", 0.54), _ekg("o4", 0.60)
-        p1, p2, p3     = _pw("o1"), _pw("o2"), _pw("o3")
 
-        # Kristal yükselen arpej: C5 → E5 → G5 → B5 → C6
-        a1 = _af("sine=frequency=523.3:duration=0.35,afade=t=in:st=0:d=0.015,afade=t=out:st=0.22:d=0.13,volume=0.32", 0.35, "ao1.aac")
-        a2 = _af("sine=frequency=659.3:duration=0.35,afade=t=in:st=0:d=0.015,afade=t=out:st=0.22:d=0.13,volume=0.32", 0.35, "ao2.aac")
-        a3 = _af("sine=frequency=784.0:duration=0.35,afade=t=in:st=0:d=0.015,afade=t=out:st=0.22:d=0.13,volume=0.32", 0.35, "ao3.aac")
-        a4 = _af("sine=frequency=987.8:duration=0.38,afade=t=in:st=0:d=0.015,afade=t=out:st=0.25:d=0.13,volume=0.34", 0.38, "ao4.aac")
-        a5 = _af("sine=frequency=1046.5:duration=1.4,afade=t=in:st=0:d=0.05,afade=t=out:st=0.9:d=0.5,volume=0.36",   1.4,  "ao5.aac")
-        harm = _af(
-            "sine=frequency=2093:duration=0.8,"
+        # EKG dizisi — 72 BPM (833ms aralık) × 5 vuruş, giderek güçlenen
+        ekgs = [
+            (_pw("o0"),  _ekg("o0", 0.35)),  # 0 — çok yumuşak başlangıç
+            (_pw("o1"),  _ekg("o1", 0.42)),  # 1
+            (_pw("o2"),  _ekg("o2", 0.50)),  # 2
+            (_pw("o3"),  _ekg("o3", 0.58)),  # 3
+            (None,       _ekg("o4", 0.65)),  # 4 — güçlü son vuruş
+        ]
+
+        # Çift oktav yükselen arpej — C4→E4→G4→B4→C5→E5→G5→B5→C6
+        # Alt oktav (C4 grubu)
+        al1 = _note(261.6, 0.32, 0.28, "al1")   # C4
+        al2 = _note(329.6, 0.32, 0.28, "al2")   # E4
+        al3 = _note(392.0, 0.32, 0.28, "al3")   # G4
+        al4 = _note(493.9, 0.32, 0.28, "al4")   # B4
+        # Üst oktav (C5 grubu) — crescendo
+        au1 = _note(523.3, 0.34, 0.32, "au1")   # C5
+        au2 = _note(659.3, 0.34, 0.33, "au2")   # E5
+        au3 = _note(784.0, 0.34, 0.34, "au3")   # G5
+        au4 = _note(987.8, 0.36, 0.35, "au4")   # B5
+        # Doruk — C6 uzun, parlak
+        peak = _af(
+            "sine=frequency=1046.5:duration=2.2,"
             "afade=t=in:st=0:d=0.06,"
-            "afade=t=out:st=0.5:d=0.3,"
-            "volume=0.10",
-            0.8, "ao_harm.aac"
+            "afade=t=out:st=1.4:d=0.8,"
+            "volume=0.40",
+            2.2, "ao_peak.aac"
+        )
+        # Harmonik üst (C7 — çok hafif parlaklık)
+        harm7 = _af(
+            "sine=frequency=2093:duration=1.2,"
+            "afade=t=in:st=0:d=0.08,"
+            "afade=t=out:st=0.8:d=0.4,"
+            "volume=0.08",
+            1.2, "ao_harm7.aac"
+        )
+        # Son uzun diapason — kapanış öncesi dinginlik
+        diap2 = _af(
+            "sine=frequency=440:duration=1.0,"
+            "afade=t=in:st=0:d=0.06,"
+            "afade=t=out:st=0.65:d=0.35,"
+            "volume=0.18",
+            1.0, "ao_diap2.aac"
         )
 
+        # Zaman çizelgesi (ms)
+        # Bölüm 1 — Uyanış (0–1500ms): whoosh + sub + pad
+        # Bölüm 2 — Nabız (1500–3500ms): EKG × 5 + diapason
+        # Bölüm 3 — Yükseliş (3500–6000ms): çift oktav arpej
+        # Bölüm 4 — Doruk (6000–8000ms): C6 uzun + harmonik + dinginlik
+        EKG_START = 1500
+        BPM72     = 833  # ms
         parts = [
-            (whoosh,   0),
-            (pad_c,    200),   (pad_g,  200),  (pad_e, 280),
-            (p1,        50),   (e1,      95),
-            (p2,       928),   (e2,     973),
-            (p3,      1761),   (e3,    1806),
-                               (e4,    2639),
-            (diapason, 2450),
-            (a1,       3000),
-            (a2,       3360),
-            (a3,       3720),
-            (a4,       4080),
-            (a5,       4460),
-            (harm,     4480),
+            # Arka plan (tüm süre)
+            (whoosh,  0),
+            (sub,     0),
+            (pad_c,   0),
+            (pad_g,   0),
+            (pad_e,   0),
+            (pad_hi,  0),
+            # EKG dizisi
+            (ekgs[0][0], EKG_START - 55),   (ekgs[0][1], EKG_START),
+            (ekgs[1][0], EKG_START + BPM72*1 - 55), (ekgs[1][1], EKG_START + BPM72*1),
+            (ekgs[2][0], EKG_START + BPM72*2 - 55), (ekgs[2][1], EKG_START + BPM72*2),
+            (ekgs[3][0], EKG_START + BPM72*3 - 55), (ekgs[3][1], EKG_START + BPM72*3),
+            (ekgs[4][1], EKG_START + BPM72*4),       # son vuruş — P dalgasız, sert
+            # Diapason geçiş
+            (diapason, EKG_START + BPM72*2 + 200),
+            # Çift oktav arpej (3500ms'den itibaren)
+            (al1, 3500),
+            (al2, 3820),
+            (al3, 4140),
+            (al4, 4460),
+            (au1, 4800),
+            (au2, 5140),
+            (au3, 5480),
+            (au4, 5820),
+            # Doruk
+            (peak,   6180),
+            (harm7,  6200),
+            (diap2,  6900),
         ]
-        fade_out_at = 4.32
+        fade_out_at = 7.40
 
+    # ════════════════════════════════════════════════════════════════════
+    # KAPANIŞ — 7 saniye
+    # ════════════════════════════════════════════════════════════════════
     else:
-        # EKG yavaşlıyor: 833 → 950 → 1100 ms aralık
-        e1, e2, e3 = _ekg("c1", 0.55), _ekg("c2", 0.50), _ekg("c3", 0.42)
+        # EKG yavaşlıyor — 3 vuruş, artan aralık: 833→950→1120ms
+        e1 = _ekg("c1", 0.58)
+        e2 = _ekg("c2", 0.50)
+        e3 = _ekg("c3", 0.40)
+        pw1 = _pw("c1")
+        pw2 = _pw("c2")
 
-        # Medikal çift onay bip
+        # Çift oktav inen arpej — C6→B5→G5→E5→C5→B4→G4→E4→C4
+        # Üst oktav (C6 grubu)
+        du1 = _note(1046.5, 0.34, 0.36, "du1")  # C6
+        du2 = _note(987.8,  0.34, 0.34, "du2")  # B5
+        du3 = _note(784.0,  0.34, 0.32, "du3")  # G5
+        du4 = _note(659.3,  0.34, 0.30, "du4")  # E5
+        # Alt oktav (C5 grubu) — decrescendo
+        dl1 = _note(523.3, 0.34, 0.28, "dl1")   # C5
+        dl2 = _note(493.9, 0.34, 0.26, "dl2")   # B4
+        dl3 = _note(392.0, 0.34, 0.24, "dl3")   # G4
+        dl4 = _note(329.6, 0.36, 0.22, "dl4")   # E4
+        # Son ton — C4 uzun, derin
+        final = _af(
+            "sine=frequency=261.6:duration=2.0,"
+            "afade=t=in:st=0:d=0.08,"
+            "afade=t=out:st=1.1:d=0.9,"
+            "volume=0.30",
+            2.0, "cl_final.aac"
+        )
+
+        # Medikal onay çifti — sertçe vurgulu
         conf1 = _af(
-            "sine=frequency=1320:duration=0.12,"
-            "afade=t=in:st=0:d=0.008,"
-            "afade=t=out:st=0.07:d=0.05,"
-            "volume=0.42",
-            0.12, "conf1.aac"
+            "sine=frequency=1320:duration=0.14,"
+            "afade=t=in:st=0:d=0.007,"
+            "afade=t=out:st=0.08:d=0.06,"
+            "volume=0.45",
+            0.14, "conf1.aac"
         )
         conf2 = _af(
-            "sine=frequency=1760:duration=0.16,"
+            "sine=frequency=1760:duration=0.18,"
+            "afade=t=in:st=0:d=0.007,"
+            "afade=t=out:st=0.10:d=0.08,"
+            "volume=0.40",
+            0.18, "conf2.aac"
+        )
+        # Üçüncü onay — oktav tamamlayıcı
+        conf3 = _af(
+            "sine=frequency=2093:duration=0.22,"
             "afade=t=in:st=0:d=0.008,"
-            "afade=t=out:st=0.09:d=0.07,"
-            "volume=0.38",
-            0.16, "conf2.aac"
+            "afade=t=out:st=0.12:d=0.10,"
+            "volume=0.28",
+            0.22, "conf3.aac"
         )
 
-        # İnen kristal arpej: C6 → B5 → G5 → E5 → C5
-        c1 = _af("sine=frequency=1046.5:duration=0.35,afade=t=in:st=0:d=0.015,afade=t=out:st=0.22:d=0.13,volume=0.34", 0.35, "ac1.aac")
-        c2 = _af("sine=frequency=987.8:duration=0.35,afade=t=in:st=0:d=0.015,afade=t=out:st=0.22:d=0.13,volume=0.32",  0.35, "ac2.aac")
-        c3 = _af("sine=frequency=784.0:duration=0.35,afade=t=in:st=0:d=0.015,afade=t=out:st=0.22:d=0.13,volume=0.30",  0.35, "ac3.aac")
-        c4 = _af("sine=frequency=659.3:duration=0.38,afade=t=in:st=0:d=0.015,afade=t=out:st=0.25:d=0.13,volume=0.28",  0.38, "ac4.aac")
-        c5 = _af("sine=frequency=523.3:duration=1.8,afade=t=in:st=0:d=0.07,afade=t=out:st=1.1:d=0.7,volume=0.32",      1.8,  "ac5.aac")
+        # Son nefes — derin, sakin kapanış
         breath = _af(
-            "anoisesrc=color=brown:duration=1.2,"
-            "highpass=f=80,"
-            "lowpass=f=400,"
-            "afade=t=in:st=0:d=0.4,"
-            "afade=t=out:st=0.6:d=0.6,"
-            "volume=0.06",
-            1.2, "breath_c.aac"
+            "anoisesrc=color=brown:duration=2.0,"
+            "highpass=f=60,"
+            "lowpass=f=320,"
+            "afade=t=in:st=0:d=0.5,"
+            "afade=t=out:st=0.9:d=1.1,"
+            "volume=0.055",
+            2.0, "breath_c.aac"
         )
 
+        # Zaman çizelgesi (ms)
+        # Bölüm 1 — Açılış + EKG (0–2500ms)
+        # Bölüm 2 — İniş (2200–5500ms): çift oktav inen arpej
+        # Bölüm 3 — Kapanış (5000–7000ms): onay + son nefes + fade
         parts = [
-            (pad_c,    0),    (pad_g,    0),    (pad_e,   60),
-            (whoosh,   0),
-            (e1,       200),
-            (e2,      1033),
-            (e3,      1983),
-            (diapason, 2200),
-            (c1,       2600),
-            (c2,       2960),
-            (c3,       3320),
-            (c4,       3680),
-            (c5,       4040),
-            (conf1,    4600),
-            (conf2,    4740),
-            (breath,   3800),
+            # Arka plan
+            (whoosh, 0),
+            (sub,    0),
+            (pad_c,  0),
+            (pad_g,  0),
+            (pad_e,  0),
+            (pad_hi, 0),
+            # EKG yavaşlıyor
+            (pw1,  345),  (e1,  400),
+            (pw2, 1233),  (e2, 1288),
+                          (e3, 2408),   # son — P dalgasız
+            # Diapason
+            (diapason, 1600),
+            # Çift oktav inen arpej (2200ms'den)
+            (du1, 2200),
+            (du2, 2540),
+            (du3, 2880),
+            (du4, 3220),
+            (dl1, 3560),
+            (dl2, 3900),
+            (dl3, 4240),
+            (dl4, 4580),
+            # Son derin ton
+            (final, 4920),
+            # Medikal onay çifti + üçlü
+            (conf1, 5600),
+            (conf2, 5750),
+            (conf3, 5940),
+            # Son nefes
+            (breath, 4800),
         ]
-        fade_out_at = 4.50
+        fade_out_at = 6.50
 
-    # Mix
-    total_dur = 5.0
-    fo_dur    = total_dur - fade_out_at
-    in_args   = []
+    # ── Mix ──────────────────────────────────────────────────────────────
+    fo_dur  = total_dur - fade_out_at
+    in_args = []
     for path, _ in parts:
         in_args += ["-i", path]
 
@@ -346,9 +508,9 @@ def make_jingle(work_dir: str, kind: str = "open") -> str:
     )
     fp.append(
         f"[mix]"
-        f"afade=t=in:st=0:d=0.12,"
+        f"afade=t=in:st=0:d=0.18,"
         f"afade=t=out:st={fade_out_at}:d={fo_dur},"
-        f"volume=3.2"
+        f"volume=3.0"
         f"[out]"
     )
 
@@ -359,7 +521,7 @@ def make_jingle(work_dir: str, kind: str = "open") -> str:
          "-t", str(total_dur),
          "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
          out_path],
-        capture_output=True, timeout=60
+        capture_output=True, timeout=90
     )
 
     for path, _ in parts:
@@ -802,16 +964,17 @@ def build_video(slide_images, audio_paths, seek_starts, durations, speakers, wor
     has_audio  = audio_file is not None
     color      = speakers[0].get("rgb", BRAND_RGB) if speakers else BRAND_RGB
 
-    jingle_nf  = max(1, round(JINGLE_DUR * VIDEO_FPS))
+    jingle_open_nf  = max(1, round(JINGLE_OPEN_DUR  * VIDEO_FPS))
+    jingle_close_nf = max(1, round(JINGLE_CLOSE_DUR * VIDEO_FPS))
 
     # 1. Açılış jingle video
     if cb: cb(0.03, "Açılış jingle hazırlanıyor…")
     intro_vid = os.path.join(work_dir, "intro_vid.mp4")
     def intro_frames():
-        for fi in range(jingle_nf):
-            t = fi / max(jingle_nf - 1, 1)
+        for fi in range(jingle_open_nf):
+            t = fi / max(jingle_open_nf - 1, 1)
             yield render_intro_frame(t, "open", color)
-    _pipe_frames_to_file(intro_frames(), jingle_nf, intro_vid)
+    _pipe_frames_to_file(intro_frames(), jingle_open_nf, intro_vid)
 
     # 2. Açılış ses
     if cb: cb(0.08, "Açılış jingle sesi sentezleniyor…")
@@ -843,10 +1006,10 @@ def build_video(slide_images, audio_paths, seek_starts, durations, speakers, wor
     if cb: cb(0.82, "Kapanış jingle hazırlanıyor…")
     outro_vid = os.path.join(work_dir, "outro_vid.mp4")
     def outro_frames():
-        for fi in range(jingle_nf):
-            t = fi / max(jingle_nf - 1, 1)
+        for fi in range(jingle_close_nf):
+            t = fi / max(jingle_close_nf - 1, 1)
             yield render_intro_frame(t, "close", color)
-    _pipe_frames_to_file(outro_frames(), jingle_nf, outro_vid)
+    _pipe_frames_to_file(outro_frames(), jingle_close_nf, outro_vid)
 
     # 6. Kapanış ses
     if cb: cb(0.87, "Kapanış jingle sesi sentezleniyor…")
@@ -1283,14 +1446,14 @@ def render_sidebar():
             f'📐 Video: {VIDEO_W}×{VIDEO_H} · {VIDEO_FPS}fps<br>'
             f'🟩 Slayt alanı: {SLIDE_AREA_W}×{SLIDE_AREA_H}px<br>'
             f'📌 Üst bant: {TOP_BAR}px · Alt bant: {BOT_BAR}px<br>'
-            f'🎵 Jingle: {int(JINGLE_DUR)}sn açılış + {int(JINGLE_DUR)}sn kapanış<br>'
+            f'🎵 Jingle: {int(JINGLE_OPEN_DUR)}sn açılış + {int(JINGLE_CLOSE_DUR)}sn kapanış<br>'
             f'✅ Başlıklar tam görünür — bant dışı'
             f'</div>',
             unsafe_allow_html=True)
         st.markdown("---")
         st.markdown(
             '<div style="font-size:.6rem;color:#2a4038;text-align:center;">'
-            'v16.0 · Medikal Jingle · EKG Animasyon · Temiz Ses</div>',
+            'v17.0 · Medikal Jingle 8+7sn · EKG Animasyon · Çift Oktav Arpej</div>',
             unsafe_allow_html=True)
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1333,9 +1496,9 @@ def main():
     # Jingle bilgi kutusu
     st.markdown(
         '<div class="jingle-info">'
-        '🎵 <strong>Profesyonel Medikal Jingle v2.0</strong> — Her video otomatik olarak:<br>'
-        '&nbsp;&nbsp;▶ <strong>Açılış (5sn):</strong> EKG bip zinciri · Steril sine pad · Diapason 440 Hz · Kristal arpej C5→C6<br>'
-        '&nbsp;&nbsp;◀ <strong>Kapanış (5sn):</strong> Yavaşlayan EKG · İnen arpej C6→C5 · Medikal onay çifti 1320+1760 Hz<br>'
+        '🎵 <strong>Profesyonel Medikal Jingle v3.0</strong> — Her video otomatik olarak:<br>'
+        '&nbsp;&nbsp;▶ <strong>Açılış (8sn):</strong> Uyanış whoosh · EKG × 5 (72 BPM) · Diapason 440 Hz · Çift oktav arpej C4→C6 · Doruk tonu<br>'
+        '&nbsp;&nbsp;◀ <strong>Kapanış (7sn):</strong> Yavaşlayan EKG × 3 · Çift oktav inen arpej C6→C4 · Üçlü medikal onay · Son nefes<br>'
         '&nbsp;&nbsp;✨ Tüm sesler sıfırdan sentezlenir — dış dosya gerekmez'
         '</div>',
         unsafe_allow_html=True,
@@ -1432,7 +1595,7 @@ def main():
     else:
         n_slides   = len(st.session_state.ss_slide_notes)
         total_secs = sum(st.session_state.ss_durations.get(i, 3.0) for i in range(n_slides))
-        total_with_jingles = total_secs + JINGLE_DUR * 2
+        total_with_jingles = total_secs + JINGLE_OPEN_DUR + JINGLE_CLOSE_DUR
         mins, secs = divmod(int(total_with_jingles), 60)
         st.markdown(
             f'<div class="srow">'
@@ -1441,7 +1604,7 @@ def main():
             f'<span>📐 <strong>{VIDEO_W}×{VIDEO_H}</strong></span>'
             f'<span>🎬 <strong>{VIDEO_FPS} FPS</strong></span>'
             f'<span>🎭 <strong>{len(chars)}</strong> konuşmacı</span>'
-            f'<span>🎵 5sn açılış + 5sn kapanış jingle</span>'
+            f'<span>🎵 {int(JINGLE_OPEN_DUR)}sn açılış + {int(JINGLE_CLOSE_DUR)}sn kapanış</span>'
             f'</div>',
             unsafe_allow_html=True)
         c1, c2 = st.columns([3, 1])
