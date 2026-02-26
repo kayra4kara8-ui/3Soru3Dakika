@@ -1,11 +1,12 @@
 """
-POLCAST | Eczacı Elif Aracıoğlu | Video Stüdyo v15.0
+POLCAST | Eczacı Elif Aracıoğlu | Video Stüdyo v16.0
 ──────────────────────────────────────────────────────────────
 • Marka rengi: Eczacı yeşili #34A883, Cormorant Garamond + DM Sans
 • Ses temizleme: highpass(80Hz) + afftdn(gürültü azaltma)
-• YENİ v15: 5s medikal açılış + 5s kapanış jingle eklenmiş
-• Slayt içeriği bantların DIŞINDA — başlıklar/içerik tam görünür
-• Letterbox/pillarbox: slayt orijinal en-boy oranı korunur
+• v16: Sidebar sistem durumu / teknik bilgi kaldırıldı
+       Ses dB yükseltme slider'ı eklendi (her ses kaynağı için)
+       Jingle sesi intro/outro normalleştirildi (-14 LUFS hedef)
+       Watermark: "Eczacı Elif Aracıoğlu" düzeltildi
 """
 import streamlit as st
 import io, os, math, base64, tempfile, subprocess, shutil, json, time
@@ -135,54 +136,82 @@ def audio_duration_sec_bytes(data: bytes) -> float:
         try: os.unlink(tmp)
         except: pass
 
-CLEAN_AF = (
-    "highpass=f=80,"
-    "afftdn=nf=-20,"
-    "aresample=async=1:min_hard_comp=0.1:first_pts=0"
-)
+# ─────────────────────────────────────────────────────────────────────────────
+# Ses temizleme + dB yükseltme
+# db_boost: kullanıcının seçtiği ek dB değeri (0 = değişiklik yok)
+# ─────────────────────────────────────────────────────────────────────────────
+def _build_clean_af(db_boost: float = 0.0) -> str:
+    """
+    Ses zinciri:
+      1. highpass 80 Hz  — düşük frekanslı uğultu keser
+      2. afftdn           — arka plan gürültüsü azaltır
+      3. loudnorm         — ses seviyesini -16 LUFS'a normalize eder (EBU R128)
+      4. volume           — kullanıcının istediği ek yükseltmeyi uygular
+    """
+    vol_factor = round(10 ** (db_boost / 20), 4)  # dB → linear
+    base = (
+        "highpass=f=80,"
+        "afftdn=nf=-20,"
+        f"loudnorm=I=-16:TP=-1.5:LRA=11,"
+        f"volume={vol_factor}"
+    )
+    return base
 
-def clean_audio(inp: str, out: str, step: str = "Ses temizleme"):
-    _run([FFMPEG, "-y", "-i", inp, "-af", CLEAN_AF,
+def clean_audio(inp: str, out: str, db_boost: float = 0.0, step: str = "Ses temizleme"):
+    af = _build_clean_af(db_boost)
+    _run([FFMPEG, "-y", "-i", inp, "-af", af,
           "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", out],
          timeout=180, step_name=step)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # MEDİKAL JİNGLE ÜRETİCİ
-# ─────────────────────────────────────────────────────────────────────────────
-# ffmpeg lavfi ile sıfırdan sentezlenir — dış dosya gerekmez.
-# Açılış: yükselen arpej  (C5→E5→G5→C6)
-# Kapanış: inen arpej     (C6→G5→E5→C5)
 # ═════════════════════════════════════════════════════════════════════════════
-def _make_note_file(freq: float, dur: float, work_dir: str, tag: str) -> str:
-    out = os.path.join(work_dir, f"note_{tag}.aac")
-    filt = (
-        f"sine=frequency={freq}:duration={dur},"
-        f"afade=t=in:st=0:d=0.03,"
-        f"afade=t=out:st={max(dur-0.15, dur*0.7)}:d=0.12,"
-        f"volume=0.28"
-    )
+def _save_af(filt: str, dur: float, out: str):
     _run([FFMPEG, "-y", "-f", "lavfi", "-i", filt,
-          "-t", str(dur), "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", out],
-         timeout=30, step_name=f"Nota {freq}Hz")
-    return out
+          "-t", str(dur), "-c:a", "aac", "-b:a", "128k",
+          "-ar", "44100", "-ac", "2", out],
+         timeout=30, step_name="Ses katmanı")
+
+def _mix_layers(parts: list, out: str, total_dur: float,
+                vol: float = 2.8, fade_in: float = 0.12, fade_out_at: float = None):
+    fo = fade_out_at if fade_out_at else (total_dur - 0.7)
+    in_args = []
+    for path, _ in parts:
+        in_args += ["-i", path]
+    n = len(parts)
+    fp = []
+    for i, (_, d) in enumerate(parts):
+        fp.append(f"[{i}]adelay={d}|{d}[d{i}]")
+    fp.append(f"{''.join(f'[d{i}]' for i in range(n))}amix=inputs={n}:normalize=0[mix]")
+    # loudnorm eklenmiş — jingle ses seviyesini konuşma sesine yaklaştırır
+    fp.append(
+        f"[mix]afade=t=in:st=0:d={fade_in},"
+        f"afade=t=out:st={fo}:d={total_dur - fo},"
+        f"volume={vol},"
+        f"loudnorm=I=-16:TP=-1.5:LRA=11[out]"
+    )
+    _run([FFMPEG, "-y", *in_args,
+          "-filter_complex", ";".join(fp),
+          "-map", "[out]",
+          "-t", str(total_dur),
+          "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", out],
+         timeout=60, step_name="Jingle mix")
 
 def _prepare_user_jingle(audio_bytes: bytes, work_dir: str, kind: str) -> str:
-    """
-    Kullanıcının yüklediği MP3/WAV'ı jingle olarak hazırla:
-    • İlk 5 saniyeyi al (JINGLE_DUR)
-    • Fade-in (açılış) veya fade-out (kapanış) uygula
-    • AAC 192k çıktı
-    """
     raw = os.path.join(work_dir, f"user_jingle_{kind}_raw.audio")
     out = os.path.join(work_dir, f"user_jingle_{kind}.aac")
     with open(raw, "wb") as f:
         f.write(audio_bytes)
-
     if kind == "open":
-        af_chain = f"afade=t=in:st=0:d=0.5,afade=t=out:st={JINGLE_DUR-0.6}:d=0.6,volume=1.0"
+        af_chain = (f"afade=t=in:st=0:d=0.5,"
+                    f"afade=t=out:st={JINGLE_DUR-0.6}:d=0.6,"
+                    f"loudnorm=I=-16:TP=-1.5:LRA=11,"
+                    f"volume=1.0")
     else:
-        af_chain = f"afade=t=in:st=0:d=0.3,afade=t=out:st={JINGLE_DUR-0.8}:d=0.8,volume=1.0"
-
+        af_chain = (f"afade=t=in:st=0:d=0.3,"
+                    f"afade=t=out:st={JINGLE_DUR-0.8}:d=0.8,"
+                    f"loudnorm=I=-16:TP=-1.5:LRA=11,"
+                    f"volume=1.0")
     _run([
         FFMPEG, "-y",
         "-i", raw,
@@ -194,62 +223,10 @@ def _prepare_user_jingle(audio_bytes: bytes, work_dir: str, kind: str) -> str:
     return out
 
 
-def _save_af(filt: str, dur: float, out: str):
-    """lavfi filtresini AAC dosyasına yaz."""
-    _run([FFMPEG, "-y", "-f", "lavfi", "-i", filt,
-          "-t", str(dur), "-c:a", "aac", "-b:a", "128k",
-          "-ar", "44100", "-ac", "2", out],
-         timeout=30, step_name=f"Ses katmanı")
-
-def _mix_layers(parts: list, out: str, total_dur: float,
-                vol: float = 2.8, fade_in: float = 0.12, fade_out_at: float = None):
-    """
-    parts: [(dosya_yolu, delay_ms), ...]
-    Hepsini adelay ile karıştır, fade uygula.
-    """
-    fo = fade_out_at if fade_out_at else (total_dur - 0.7)
-    in_args = []
-    for path, _ in parts:
-        in_args += ["-i", path]
-    n = len(parts)
-    fp = []
-    for i, (_, d) in enumerate(parts):
-        fp.append(f"[{i}]adelay={d}|{d}[d{i}]")
-    fp.append(f"{''.join(f'[d{i}]' for i in range(n))}amix=inputs={n}:normalize=0[mix]")
-    fp.append(
-        f"[mix]afade=t=in:st=0:d={fade_in},"
-        f"afade=t=out:st={fo}:d={total_dur - fo},"
-        f"volume={vol}[out]"
-    )
-    _run([FFMPEG, "-y", *in_args,
-          "-filter_complex", ";".join(fp),
-          "-map", "[out]",
-          "-t", str(total_dur),
-          "-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2", out],
-         timeout=60, step_name="Jingle mix")
-
 def make_jingle(work_dir: str, kind: str = "open") -> str:
-    """
-    Katmanlı medikal ses tasarımı — dış dosya gerekmez, sıfırdan sentez:
-
-    AÇILIŞ (open):
-      • Katman 1 — Whoosh rise: brown noise → yüksek geçiş filtresi → fade-in sweep
-      • Katman 2 — Synth pad: C4+E4+G4 major akoru + chorus → sıcak, yumuşak zemin
-      • Katman 3 — Digital pulse: 120 BPM ritmik elektronik atış (kalp benzeri)
-      • Katman 4 — Yükselen arpej: C5→E5→G5→C6 crescendo ile bitiş
-
-    KAPANIŞ (close):
-      • Katman 1 — Whoosh down: tersine brown noise → alçalan sweep
-      • Katman 2 — Synth pad: aynı akoru yavaşça söndür
-      • Katman 3 — Tek beat: kapanış işareti
-      • Katman 4 — İnen arpej: C6→G5→E5→C5 + son uzun nota
-    """
     out_path = os.path.join(work_dir, f"jingle_{kind}.aac")
-    d = work_dir  # kısaltma
+    d = work_dir
 
-    # ── Ortak katmanlar ──────────────────────────────────────────────────────
-
-    # Whoosh: brown noise bandpass → yükselen süpürme hissi
     whoosh = os.path.join(d, f"j_{kind}_whoosh.aac")
     _save_af(
         "anoisesrc=color=brown:duration=5,"
@@ -261,7 +238,6 @@ def make_jingle(work_dir: str, kind: str = "open") -> str:
         5.0, whoosh
     )
 
-    # Synth pad: C4 + E4 + G4 major akoru, chorus ile yumuşatılmış
     pad_c = os.path.join(d, f"j_{kind}_pc.aac")
     pad_e = os.path.join(d, f"j_{kind}_pe.aac")
     pad_g = os.path.join(d, f"j_{kind}_pg.aac")
@@ -269,14 +245,12 @@ def make_jingle(work_dir: str, kind: str = "open") -> str:
     _save_af("sine=frequency=329.6:duration=5,chorus=0.5:0.9:55|65:0.3|0.3:0.2|0.3:2|1.5,volume=0.13", 5.0, pad_e)
     _save_af("sine=frequency=392.0:duration=5,chorus=0.5:0.9:45|55:0.3|0.3:0.2|0.3:2|1.5,volume=0.11", 5.0, pad_g)
 
-    # Digital pulse (elektronik kalp atışı, 120 BPM)
     beat_lo = os.path.join(d, f"j_{kind}_blo.aac")
     beat_hi = os.path.join(d, f"j_{kind}_bhi.aac")
     _save_af("sine=frequency=180:duration=0.08,afade=t=in:st=0:d=0.005,afade=t=out:st=0.04:d=0.04,volume=0.48", 0.08, beat_lo)
     _save_af("sine=frequency=120:duration=0.12,afade=t=in:st=0:d=0.005,afade=t=out:st=0.05:d=0.07,volume=0.28", 0.12, beat_hi)
 
     if kind == "open":
-        # Yükselen arpej notaları
         arp1 = os.path.join(d, "jop_a1.aac")
         arp2 = os.path.join(d, "jop_a2.aac")
         arp3 = os.path.join(d, "jop_a3.aac")
@@ -287,27 +261,26 @@ def make_jingle(work_dir: str, kind: str = "open") -> str:
         _save_af("sine=frequency=1046.5:duration=1.9,afade=t=in:st=0:d=0.06,afade=t=out:st=1.3:d=0.6,volume=0.36", 1.9, arp4)
 
         parts = [
-            (whoosh,  0),     # arka plan sweep başlar
-            (pad_c,   180),   # pad yavaşça girer
+            (whoosh,  0),
+            (pad_c,   180),
             (pad_e,   180),
             (pad_g,   180),
-            (beat_lo, 0),     # beat 1
+            (beat_lo, 0),
             (beat_hi, 80),
-            (beat_lo, 500),   # beat 2
+            (beat_lo, 500),
             (beat_hi, 580),
-            (beat_lo, 1000),  # beat 3
+            (beat_lo, 1000),
             (beat_hi, 1080),
-            (beat_lo, 1500),  # beat 4
+            (beat_lo, 1500),
             (beat_hi, 1580),
-            (arp1,    2000),  # C5
-            (arp2,    2430),  # E5
-            (arp3,    2860),  # G5
-            (arp4,    3320),  # C6 uzun — crescendo
+            (arp1,    2000),
+            (arp2,    2430),
+            (arp3,    2860),
+            (arp4,    3320),
         ]
         _mix_layers(parts, out_path, 5.0, vol=2.9, fade_in=0.15, fade_out_at=4.35)
 
-    else:  # close
-        # İnen arpej notaları
+    else:
         car1 = os.path.join(d, "jcl_a1.aac")
         car2 = os.path.join(d, "jcl_a2.aac")
         car3 = os.path.join(d, "jcl_a3.aac")
@@ -320,35 +293,30 @@ def make_jingle(work_dir: str, kind: str = "open") -> str:
         _save_af("sine=frequency=880:duration=0.14,afade=t=in:st=0:d=0.005,afade=t=out:st=0.07:d=0.07,volume=0.28", 0.14, cbip)
 
         parts = [
-            (pad_c,   0),     # pad hemen
+            (pad_c,   0),
             (pad_e,   0),
             (pad_g,   0),
-            (whoosh,  0),     # hafif whoosh arka planda
-            (beat_lo, 150),   # tek beat — kapanış işareti
+            (whoosh,  0),
+            (beat_lo, 150),
             (beat_hi, 230),
-            (car1,    750),   # C6 inen
-            (car2,    1200),  # G5
-            (car3,    1650),  # E5
-            (car4,    2100),  # C5 uzun
-            (cbip,    4050),  # son bip
+            (car1,    750),
+            (car2,    1200),
+            (car3,    1650),
+            (car4,    2100),
+            (cbip,    4050),
         ]
         _mix_layers(parts, out_path, 5.0, vol=2.9, fade_in=0.10, fade_out_at=4.25)
 
-    # Geçici dosyaları temizle
     for path, _ in parts:
         try: os.unlink(path)
         except: pass
 
     return out_path
 
-# =============================================================================
+# ═════════════════════════════════════════════════════════════════════════════
 # AÇILIŞ / KAPANIŞ KARESI RENDER
 # ═════════════════════════════════════════════════════════════════════════════
 def render_intro_frame(t: float, kind: str, color=BRAND_RGB) -> np.ndarray:
-    """
-    t: 0.0–1.0 (zaman içindeki konum)
-    kind: 'open' veya 'close'
-    """
     frame = Image.new("RGB", (VIDEO_W, VIDEO_H), (4, 8, 6))
     draw  = ImageDraw.Draw(frame, "RGBA")
 
@@ -359,42 +327,34 @@ def render_intro_frame(t: float, kind: str, color=BRAND_RGB) -> np.ndarray:
 
     cx, cy = VIDEO_W // 2, VIDEO_H // 2
 
-    # Arka plan gradient efekti (basit radyal — daireler)
     for r in range(320, 0, -40):
         alpha = int(15 * (1 - r / 320) * (0.5 + 0.5 * math.sin(t * math.pi)))
         draw.ellipse([cx - r, cy - r, cx + r, cy + r],
                      fill=(*color, alpha))
 
-    # Animasyonlu dış halka
     ring_r = int(160 + 20 * math.sin(t * math.pi * 2))
     draw.ellipse([cx - ring_r, cy - ring_r, cx + ring_r, cy + ring_r],
                  outline=(*color, 60), width=2)
 
-    # İç daire (dolgu)
     inner = 110
     draw.ellipse([cx - inner, cy - inner, cx + inner, cy + inner],
                  fill=(*color, 30), outline=(*color, 120), width=3)
 
-    # Artı işareti (medikal sembol)
     cross_size = 32
     cross_w    = 10
-    # Dikey
     draw.rectangle([cx - cross_w//2, cy - cross_size,
                     cx + cross_w//2, cy + cross_size],
                    fill=(*color, 220))
-    # Yatay
     draw.rectangle([cx - cross_size, cy - cross_w//2,
                     cx + cross_size, cy + cross_w//2],
                    fill=(*color, 220))
 
-    # Fade alpha (açılışta gelir, kapanışta gider)
     if kind == "open":
         fade = min(1.0, t * 3)
     else:
         fade = max(0.0, 1.0 - t * 2.5)
     txt_alpha = int(255 * fade)
 
-    # Program adı
     title = "POLCAST"
     try:
         tw = draw.textlength(title, font=fn36)
@@ -403,12 +363,11 @@ def render_intro_frame(t: float, kind: str, color=BRAND_RGB) -> np.ndarray:
     draw.text((cx - tw // 2, cy - 95), title,
               font=fn36, fill=(*color, txt_alpha))
 
-    # Alt çizgi
     line_w = int(tw * fade)
     draw.rectangle([cx - line_w//2, cy - 58, cx + line_w//2, cy - 55],
                    fill=(*color, txt_alpha))
 
-    # İsim
+    # Düzeltildi: "Eczacı Elif Aracıoğlu"
     name = "Eczacı Elif Aracıoğlu"
     try:
         nw = draw.textlength(name, font=fn22)
@@ -417,7 +376,6 @@ def render_intro_frame(t: float, kind: str, color=BRAND_RGB) -> np.ndarray:
     draw.text((cx - nw // 2, cy + 125), name,
               font=fn22, fill=(195, 235, 215, txt_alpha))
 
-    # Açılış / Kapanış etiketi
     label = "HOŞ GELDİNİZ" if kind == "open" else "GÖRÜŞMEK ÜZERE"
     try:
         lw = draw.textlength(label, font=fn14)
@@ -426,9 +384,7 @@ def render_intro_frame(t: float, kind: str, color=BRAND_RGB) -> np.ndarray:
     draw.text((cx - lw // 2, cy + 160), label,
               font=fn14, fill=(*color, int(txt_alpha * 0.7)))
 
-    # Üst ince çizgi
     draw.rectangle([0, 0, VIDEO_W, 3], fill=(*color, 200))
-    # Alt ince çizgi
     draw.rectangle([0, VIDEO_H - 3, VIDEO_W, VIDEO_H], fill=(*color, 200))
 
     return np.array(frame.convert("RGB"))
@@ -493,10 +449,11 @@ def read_pptx_notes(pptx_bytes: bytes) -> list:
     return notes
 
 # ═════════════════════════════════════════════════════════════════════════════
-# SES HAZIRLAMA
+# SES HAZIRLAMA  (db_boost parametresi eklendi)
 # ═════════════════════════════════════════════════════════════════════════════
 def prepare_audio_segments(
-    slide_audio_map, durations, n_slides, global_audio, use_global, work_dir
+    slide_audio_map, durations, n_slides, global_audio, use_global, work_dir,
+    db_boost: float = 0.0
 ):
     audio_paths, seek_starts, dur_list = [], [], []
 
@@ -506,7 +463,7 @@ def prepare_audio_segments(
             f.write(global_audio)
         raw_dur = audio_duration_ffprobe(raw_g)
         clean_g = os.path.join(work_dir, "global_clean.aac")
-        clean_audio(raw_g, clean_g, step="Global ses temizleme")
+        clean_audio(raw_g, clean_g, db_boost=db_boost, step="Global ses temizleme")
         clean_dur = audio_duration_ffprobe(clean_g)
         total_audio_dur = min(raw_dur, clean_dur)
 
@@ -533,7 +490,7 @@ def prepare_audio_segments(
                 with open(raw, "wb") as f:
                     f.write(ab)
                 try:
-                    clean_audio(raw, clean, step=f"Slayt {i+1} ses")
+                    clean_audio(raw, clean, db_boost=db_boost, step=f"Slayt {i+1} ses")
                     real_dur = audio_duration_ffprobe(clean)
                     audio_paths.append(clean)
                     seek_starts.append(0.0)
@@ -567,7 +524,6 @@ def render_frame(slide_img, slide_idx, total, t, speaker, has_audio):
     fn13 = _font(13)
     fn11 = _font(11)
 
-    # Üst bant
     draw.rectangle([0, 0, wi, TOP_BAR], fill=(4, 8, 6, 255))
     draw.rectangle([0, TOP_BAR-2, wi, TOP_BAR], fill=(*color, 255))
     draw.text((16, 8),  "POL",   font=fn18, fill=(*color, 255))
@@ -581,7 +537,8 @@ def render_frame(slide_img, slide_idx, total, t, speaker, has_audio):
     cx = wi // 2 + 80
     draw.ellipse([cx-6, dot_cy-6, cx+6, dot_cy+6], fill=(210, 55, 55, da))
     draw.text((cx+12, dot_cy-7), "CANLI", font=fn11, fill=(210, 55, 55, 210))
-    brand_text = "Eczacı Elif Aracıoglu"
+    # Düzeltildi: "Eczacı Elif Aracıoğlu"
+    brand_text = "Eczacı Elif Aracıoğlu"
     try:
         btw = draw.textlength(brand_text, font=fn11)
     except:
@@ -590,7 +547,6 @@ def render_frame(slide_img, slide_idx, total, t, speaker, has_audio):
     _draw_speaker_dot(draw, bx-8, dot_cy, 5, color)
     draw.text((bx, dot_cy-7), brand_text, font=fn11, fill=(*color, 145))
 
-    # Alt bant
     bot_y = hi - BOT_BAR
     draw.rectangle([0, bot_y, wi, hi], fill=(4, 8, 6, 255))
     draw.rectangle([0, bot_y, wi, bot_y+2], fill=(*color, 255))
@@ -618,10 +574,9 @@ def render_frame(slide_img, slide_idx, total, t, speaker, has_audio):
     return np.array(frame.convert("RGB"))
 
 # ═════════════════════════════════════════════════════════════════════════════
-# VIDEO OLUŞTURMA — Açılış Jingle + Ana İçerik + Kapanış Jingle
+# VIDEO OLUŞTURMA
 # ═════════════════════════════════════════════════════════════════════════════
 def _pipe_frames_to_file(frames_iter, nf: int, out_path: str):
-    """Belirtilen kareleri pipe ile ffmpeg'e yazar, sadece-video mp4 üretir."""
     cmd = [
         FFMPEG, "-y",
         "-f", "rawvideo", "-vcodec", "rawvideo",
@@ -648,7 +603,6 @@ def _pipe_frames_to_file(frames_iter, nf: int, out_path: str):
         raise RuntimeError(f"Pipe encode hatası: {e}")
 
 def _mux(video_path: str, audio_path: str, out_path: str):
-    """Video + ses birleştir. Ses video kadar kesilir (-shortest)."""
     _run([
         FFMPEG, "-y",
         "-i", video_path,
@@ -662,7 +616,6 @@ def _mux(video_path: str, audio_path: str, out_path: str):
     ], timeout=300, step_name="Mux")
 
 def _silence(work_dir: str, dur: float, tag: str) -> str:
-    """Belirtilen sürede sessizlik üret."""
     out = os.path.join(work_dir, f"silence_{tag}.aac")
     _run([
         FFMPEG, "-y", "-f", "lavfi",
@@ -674,7 +627,6 @@ def _silence(work_dir: str, dur: float, tag: str) -> str:
     return out
 
 def _concat_videos(parts: list, out_path: str, work_dir: str):
-    """MP4 dosyalarını birleştir (stream copy)."""
     concat_list = os.path.join(work_dir, "concat.txt")
     with open(concat_list, "w") as f:
         for p in parts:
@@ -694,9 +646,8 @@ def build_video(slide_images, audio_paths, seek_starts, durations, speakers, wor
     has_audio  = audio_file is not None
     color      = speakers[0].get("rgb", BRAND_RGB) if speakers else BRAND_RGB
 
-    jingle_nf  = max(1, round(JINGLE_DUR * VIDEO_FPS))  # 120 kare
+    jingle_nf  = max(1, round(JINGLE_DUR * VIDEO_FPS))
 
-    # ── 1. Açılış jingle karelerini encode et ─────────────────────────────
     if cb: cb(0.03, "Açılış jingle hazırlanıyor…")
     intro_vid = os.path.join(work_dir, "intro_vid.mp4")
     def intro_frames():
@@ -705,7 +656,6 @@ def build_video(slide_images, audio_paths, seek_starts, durations, speakers, wor
             yield render_intro_frame(t, "open", color)
     _pipe_frames_to_file(intro_frames(), jingle_nf, intro_vid)
 
-    # ── 2. Açılış ses (jingle müziği) ─────────────────────────────────────
     if jingle_open:
         if cb: cb(0.08, "Açılış jingle hazırlanıyor (yüklenen müzik)…")
         intro_audio = _prepare_user_jingle(jingle_open, work_dir, "open")
@@ -713,11 +663,9 @@ def build_video(slide_images, audio_paths, seek_starts, durations, speakers, wor
         if cb: cb(0.08, "Açılış jingle sesi sentezleniyor…")
         intro_audio = make_jingle(work_dir, "open")
 
-    # ── 3. Açılış mux ─────────────────────────────────────────────────────
     intro_muxed = os.path.join(work_dir, "intro_muxed.mp4")
     _mux(intro_vid, intro_audio, intro_muxed)
 
-    # ── 4. Ana içerik video karelerini encode et ───────────────────────────
     if cb: cb(0.15, "Ana içerik encode ediliyor…")
     nf_list = [max(1, round(d * VIDEO_FPS)) for d in durations]
     main_vid = os.path.join(work_dir, "main_vid.mp4")
@@ -731,7 +679,6 @@ def build_video(slide_images, audio_paths, seek_starts, durations, speakers, wor
                 yield render_frame(img, slide_idx, n, t, spk, has_audio)
     _pipe_frames_to_file(main_frames(), sum(nf_list), main_vid)
 
-    # ── 5. Ana ses ─────────────────────────────────────────────────────────
     if cb: cb(0.77, "Ana ses birleştiriliyor…")
     if has_audio:
         main_audio = audio_file
@@ -741,7 +688,6 @@ def build_video(slide_images, audio_paths, seek_starts, durations, speakers, wor
     main_muxed = os.path.join(work_dir, "main_muxed.mp4")
     _mux(main_vid, main_audio, main_muxed)
 
-    # ── 6. Kapanış jingle karelerini encode et ─────────────────────────────
     if cb: cb(0.82, "Kapanış jingle hazırlanıyor…")
     outro_vid = os.path.join(work_dir, "outro_vid.mp4")
     def outro_frames():
@@ -750,7 +696,6 @@ def build_video(slide_images, audio_paths, seek_starts, durations, speakers, wor
             yield render_intro_frame(t, "close", color)
     _pipe_frames_to_file(outro_frames(), jingle_nf, outro_vid)
 
-    # ── 7. Kapanış sesi ────────────────────────────────────────────────────
     if jingle_close:
         if cb: cb(0.87, "Kapanış jingle hazırlanıyor (yüklenen müzik)…")
         outro_audio = _prepare_user_jingle(jingle_close, work_dir, "close")
@@ -760,12 +705,10 @@ def build_video(slide_images, audio_paths, seek_starts, durations, speakers, wor
     outro_muxed = os.path.join(work_dir, "outro_muxed.mp4")
     _mux(outro_vid, outro_audio, outro_muxed)
 
-    # ── 8. Hepsini birleştir: Açılış + Ana + Kapanış ───────────────────────
     if cb: cb(0.93, "Açılış + içerik + kapanış birleştiriliyor…")
     out_mp4 = os.path.join(work_dir, "output.mp4")
     _concat_videos([intro_muxed, main_muxed, outro_muxed], out_mp4, work_dir)
 
-    # Temizlik
     for tmp in [intro_vid, intro_audio, intro_muxed,
                 main_vid, main_muxed,
                 outro_vid, outro_audio, outro_muxed]:
@@ -857,19 +800,21 @@ section[data-testid="stSidebar"]{
 .badge-gold{background:rgba(52,168,131,.1);color:var(--g);border:1px solid rgba(52,168,131,.22);}
 .dep{font-size:.72rem;margin:.1rem 0;line-height:1.55;}
 .ok{color:#55c98a;}.er{color:#d97070;}
-.ffmpeg-warn{
-  padding:.8rem 1rem;margin:.6rem 0;border-radius:10px;
-  background:rgba(217,112,112,.07);border:1px solid rgba(217,112,112,.22);
-  font-size:.78rem;color:#d97070;line-height:1.6;
-}
-.ffmpeg-warn code{background:rgba(255,255,255,.07);padding:.1rem .3rem;border-radius:4px;font-size:.73rem;}
 .audio-info{
   padding:.5rem .85rem;margin:.4rem 0;
   background:rgba(52,168,131,.05);border:1px solid rgba(52,168,131,.14);
   border-radius:8px;font-size:.72rem;color:var(--mu);line-height:1.6;
 }
 .audio-info strong{color:var(--g);}
-/* YENİ: Slayt tam görünür uyarı kutusu */
+.db-box{
+  padding:.75rem 1rem;margin:.5rem 0;border-radius:10px;
+  background:rgba(52,168,131,.07);border:1px solid rgba(52,168,131,.22);
+}
+.db-box .db-title{
+  font-size:.65rem;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--g);font-weight:700;margin-bottom:.4rem;
+}
+.db-box .db-desc{font-size:.72rem;color:var(--mu);line-height:1.6;}
 .slide-info{
   padding:.6rem 1rem;margin:.5rem 0;border-radius:8px;
   background:rgba(52,168,131,.08);border:1px solid rgba(52,168,131,.25);
@@ -929,6 +874,7 @@ def init_state():
         "ss_characters":    [c.copy() for c in DEFAULT_CHARACTERS],
         "ss_jingle_open":   None,
         "ss_jingle_close":  None,
+        "ss_db_boost":      0.0,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1007,7 +953,7 @@ def character_manager_ui():
     return chars
 
 # ═════════════════════════════════════════════════════════════════════════════
-# SES ATAMA
+# SES ATAMA  +  dB SLIDER
 # ═════════════════════════════════════════════════════════════════════════════
 def audio_assignment_ui(n_slides: int, chars: list):
     mode = st.radio(
@@ -1018,12 +964,46 @@ def audio_assignment_ui(n_slides: int, chars: list):
     use_global = mode.startswith("🔊")
     st.session_state.ss_use_global = use_global
 
+    # ── Ses yükseltme (dB Boost) ─────────────────────────────────────────────
+    st.markdown(
+        '<div class="db-box">'
+        '<div class="db-title">🔊 Ses Seviyesi Yükseltme (dB Boost)</div>'
+        '<div class="db-desc">'
+        'Sesiniz jingle veya diğer seslere göre alçak kalıyorsa bu kaydırıcıyı artırın. '
+        '<b>0 dB</b> = varsayılan (−16 LUFS loudnorm). '
+        '<b>+3 dB</b> hafif yükseltme, <b>+6 dB</b> belirgin yükseltme, '
+        '<b>+12 dB</b> maksimum (klip riski). '
+        'Jingle ile konuşma sesi aynı normalleştirmeden geçer — dengeli çıktı elde edersiniz.'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    db_val = st.slider(
+        "Ses yükseltme (dB)",
+        min_value=0.0, max_value=12.0,
+        value=float(st.session_state.get("ss_db_boost", 0.0)),
+        step=0.5,
+        format="%.1f dB",
+        key="wu_db_slider",
+        help="0 = normalleştirme (EBU R128 −16 LUFS). Artırınca konuşma sesi louder olur.",
+    )
+    st.session_state.ss_db_boost = db_val
+
+    # dB değerine göre ipucu
+    if db_val == 0:
+        st.caption("🎯 Otomatik normalleştirme aktif — ses dengeli.")
+    elif db_val <= 3:
+        st.caption(f"📶 +{db_val:.1f} dB — hafif yükseltme. Çoğu kayıt için yeterli.")
+    elif db_val <= 6:
+        st.caption(f"📶 +{db_val:.1f} dB — belirgin yükseltme. Dikkatli olun.")
+    else:
+        st.caption(f"⚠️ +{db_val:.1f} dB — güçlü yükseltme. Klip (çarpıtma) riski olabilir.")
+
     st.markdown(
         '<div class="audio-info">'
         '🧹 <strong>Otomatik ses temizleme:</strong> '
-        'Alçak frekans gürültüsü (highpass 80 Hz), arka plan sesi (afftdn −20 dB) '
-        've ses seviyesi dengeleme (loudnorm −16 LUFS) uygulanır. '
-        'Seste atlama olmaz — temiz, kesintisiz ses.'
+        'Alçak frekans gürültüsü (highpass 80 Hz), arka plan sesi (afftdn −20 dB), '
+        'ses seviyesi dengeleme (loudnorm −16 LUFS) + seçtiğiniz ek dB yükseltme.'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -1044,7 +1024,6 @@ def audio_assignment_ui(n_slides: int, chars: list):
                 st.session_state.ss_global_audio = ab
                 total_dur = audio_duration_sec_bytes(ab)
                 per_slide = total_dur / max(n_slides, 1)
-                # Sadece henüz ayarlanmamış (0 veya çok küçük) slaytlara varsayılan yaz
                 for i in range(n_slides):
                     if st.session_state.ss_durations.get(i, 0.0) <= 0.5:
                         st.session_state.ss_durations[i] = per_slide
@@ -1128,7 +1107,7 @@ def audio_assignment_ui(n_slides: int, chars: list):
     return use_global
 
 # ═════════════════════════════════════════════════════════════════════════════
-# SIDEBAR
+# SIDEBAR  — sistem durumu / teknik bilgi kaldırıldı
 # ═════════════════════════════════════════════════════════════════════════════
 def render_sidebar():
     with st.sidebar:
@@ -1142,37 +1121,7 @@ def render_sidebar():
         st.markdown("---")
         character_manager_ui()
         st.markdown("---")
-        st.markdown('<p class="lbl">Sistem Durumu</p>', unsafe_allow_html=True)
-        ffmpeg_hint  = "requirements.txt: imageio[ffmpeg]  VEYA  packages.txt: ffmpeg"
-        ffmpeg_label = "ffmpeg"
-        if FFMPEG_OK:
-            ffmpeg_label = (f"ffmpeg <span style='color:#2a4038;font-size:.6rem;'>"
-                            f"({FFMPEG})</span>")
-        checks = [
-            ("Pillow",       PIL_OK,    "pip: pillow"),
-            ("imageio",      IMAGEIO_OK,"pip: imageio[ffmpeg]"),
-            ("python-pptx",  PPTX_OK,   "pip: python-pptx"),
-            ("LibreOffice",  LO_OK,     "packages.txt: libreoffice"),
-            ("pdftoppm",     PPM_OK,    "packages.txt: poppler-utils"),
-            ("ffmpeg",       FFMPEG_OK, ffmpeg_hint),
-        ]
-        for name, ok, hint in checks:
-            cls  = "ok" if ok else "er"
-            icon = "🟢" if ok else "🔴"
-            extra = f' <span style="color:#2a4038;font-size:.62rem;">— {hint}</span>' if not ok else ""
-            dn = ffmpeg_label if name == "ffmpeg" else name
-            st.markdown(f'<div class="dep {cls}">{icon} {dn}{extra}</div>',
-                        unsafe_allow_html=True)
-        if not FFMPEG_OK:
-            st.markdown(
-                '<div class="ffmpeg-warn">⚠️ <b>ffmpeg bulunamadı!</b><br>'
-                'requirements.txt:<br><code>imageio[ffmpeg]</code><br><br>'
-                'VEYA packages.txt:<br><code>ffmpeg</code></div>',
-                unsafe_allow_html=True)
-        if not LO_OK or not PPM_OK:
-            st.markdown("---")
-            st.caption("**packages.txt**:\n```\nlibreoffice\npoppler-utils\n```")
-        st.markdown("---")
+
         chars = st.session_state.ss_characters
         st.markdown('<p class="lbl">Aktif Konuşmacılar</p>', unsafe_allow_html=True)
         for ch in chars:
@@ -1186,7 +1135,8 @@ def render_sidebar():
                 f'{ch["role"]}</span></div>',
                 unsafe_allow_html=True)
         st.markdown("---")
-        # ── Jingle yükleme ───────────────────────────────────────────────────
+
+        # ── Jingle yükleme ────────────────────────────────────────────────────
         st.markdown('<p class="lbl">🎵 Açılış / Kapanış Jingle</p>', unsafe_allow_html=True)
         st.caption("Kendi müziğinizi yükleyin (MP3/WAV). Yüklemezseniz otomatik medikal jingle kullanılır.")
         jcol1, jcol2 = st.columns(2)
@@ -1216,20 +1166,11 @@ def render_sidebar():
                 if st.button("✕ Kaldır", key="wu_jclose_del", use_container_width=True):
                     st.session_state.ss_jingle_close = None
                     st.rerun()
-        st.markdown("---")
-        # ── Bant bilgisi ───────────────────────────────────────────────────────
-        st.markdown(
-            f'<div style="font-size:.6rem;color:#2a4038;line-height:1.7;">'
-            f'📐 Video: {VIDEO_W}×{VIDEO_H} · {VIDEO_FPS}fps<br>'
-            f'🟩 Slayt alanı: {SLIDE_AREA_W}×{SLIDE_AREA_H}px<br>'
-            f'📌 Üst bant: {TOP_BAR}px · Alt bant: {BOT_BAR}px<br>'
-            f'✅ Başlıklar tam görünür — bant dışı'
-            f'</div>',
-            unsafe_allow_html=True)
+
         st.markdown("---")
         st.markdown(
             '<div style="font-size:.6rem;color:#2a4038;text-align:center;">'
-            'v13.0 · Slayt Tam Görünür · Temiz Ses · Birebir Senkron</div>',
+            'v16.0 · Ses dB Boost · Eczacı Elif Aracıoğlu</div>',
             unsafe_allow_html=True)
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1260,10 +1201,9 @@ def main():
     # ── ADIM 1: PPTX ──────────────────────────────────────────────────────────
     st.markdown('<p class="lbl">① PowerPoint Dosyası</p>', unsafe_allow_html=True)
 
-    # Slayt tam görünür bilgisi
     st.markdown(
         f'<div class="slide-info">'
-        f'✅ <strong>v13 — Slayt içeriği bantların dışında:</strong> '
+        f'✅ <strong>Slayt içeriği bantların dışında:</strong> '
         f'Üst bant ({TOP_BAR}px) ve alt bant ({BOT_BAR}px) slayt alanının dışındadır. '
         f'Slayt görüntüsü {SLIDE_AREA_W}×{SLIDE_AREA_H}px alana tam sığdırılır — '
         f'başlıklar, metinler ve içerik kesinlikle görünür.'
@@ -1353,16 +1293,12 @@ def main():
                 ("libreoffice",LO_OK),("poppler-utils",PPM_OK),("ffmpeg",FFMPEG_OK)
             ] if not ok]
             st.error(f"Eksik bağımlılık: {', '.join(missing)}")
-            if not FFMPEG_OK:
-                st.markdown(
-                    '<div class="ffmpeg-warn">🔧 <b>ffmpeg:</b><br>'
-                    'requirements.txt → <code>imageio[ffmpeg]</code><br>'
-                    'packages.txt → <code>ffmpeg</code></div>',
-                    unsafe_allow_html=True)
     else:
         n_slides   = len(st.session_state.ss_slide_notes)
         total_secs = sum(st.session_state.ss_durations.get(i, 3.0) for i in range(n_slides))
         mins, secs = divmod(int(total_secs), 60)
+        db_cur     = st.session_state.get("ss_db_boost", 0.0)
+        db_tag     = f"+{db_cur:.1f} dB" if db_cur > 0 else "Normalleştirilmiş"
         st.markdown(
             f'<div class="srow">'
             f'<span>🎞️ <strong>{n_slides}</strong> slayt</span>'
@@ -1370,7 +1306,7 @@ def main():
             f'<span>📐 <strong>{VIDEO_W}×{VIDEO_H}</strong></span>'
             f'<span>🎬 <strong>{VIDEO_FPS} FPS</strong></span>'
             f'<span>🎭 <strong>{len(chars)}</strong> konuşmacı</span>'
-            f'<span>🟩 Slayt: <strong>{SLIDE_AREA_W}×{SLIDE_AREA_H}</strong></span>'
+            f'<span>🔊 Ses: <strong>{db_tag}</strong></span>'
             f'</div>',
             unsafe_allow_html=True)
         c1, c2 = st.columns([3, 1])
@@ -1409,6 +1345,7 @@ def main():
                     global_audio    = st.session_state.ss_global_audio,
                     use_global      = st.session_state.ss_use_global,
                     work_dir        = work_dir,
+                    db_boost        = st.session_state.get("ss_db_boost", 0.0),
                 )
                 slide_speakers = [
                     chars[min(st.session_state.ss_slide_speaker.get(i, 0), len(chars)-1)]
